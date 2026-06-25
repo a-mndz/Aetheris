@@ -1,0 +1,163 @@
+```xml
+<AETHERIS_PROVIDER_CONTRACT version="1.0">
+
+<!-- ===================================================== -->
+<!--                 SYSTEM IDENTITY                       -->
+<!-- ===================================================== -->
+
+<SYSTEM>
+
+The Provider Contract defines how
+Aetheris communicates with external AI providers.
+
+It does NOT perform provider selection.
+
+It does NOT perform routing.
+
+It defines the execution contract
+between Aetheris and any model provider.
+
+</SYSTEM>
+
+<!-- ===================================================== -->
+<!--             PROVIDER ABSTRACTION                      -->
+<!-- ===================================================== -->
+
+<ABSTRACTION>
+
+Every provider SHALL expose a common interface.
+
+Provider-specific implementations
+must be hidden behind the adapter layer.
+
+The orchestrator communicates only
+with the provider interface.
+
+Never depend on provider-specific APIs.
+
+</ABSTRACTION>
+
+<!-- ===================================================== -->
+<!--              REQUEST CONTRACT                         -->
+<!-- ===================================================== -->
+
+<REQUEST>
+
+Every request SHALL contain
+
+Execution Passport
+
+Provider ID
+
+Model ID
+
+System Prompt
+
+Conversation Context
+
+Task
+
+Generation Parameters
+
+Schema Version
+
+</REQUEST>
+
+<!-- ===================================================== -->
+<!--             RESPONSE CONTRACT                         -->
+<!-- ===================================================== -->
+
+<RESPONSE>
+
+Every provider SHALL return
+
+Status
+
+Payload
+
+Latency
+
+Usage Metadata
+
+Finish Reason
+
+Provider Metadata
+
+Errors (if applicable)
+
+Provider-specific formats SHALL be
+normalized before entering the pipeline.
+
+</RESPONSE>
+
+<!-- ===================================================== -->
+<!--              PROVIDER HEALTH                          -->
+<!-- ===================================================== -->
+
+<HEALTH>
+
+Providers SHALL report
+
+Availability
+
+Latency
+
+Rate Limit Status
+
+Context Window
+
+Health Score
+
+The Runtime may use these values
+for deterministic routing.
+
+</HEALTH>
+
+<!-- ===================================================== -->
+<!--             PROVIDER FAILURES                         -->
+<!-- ===================================================== -->
+
+<FAILURES>
+
+Supported failures
+
+Timeout
+
+Unavailable
+
+Rate Limited
+
+Schema Error
+
+Authentication Error
+
+Context Limit
+
+Unknown Error
+
+Every failure SHALL be reported
+using the universal error schema.
+
+</FAILURES>
+
+<!-- ===================================================== -->
+<!--               TERMINATION                             -->
+<!-- ===================================================== -->
+
+<TERMINATION>
+
+Provider communication ends after
+
+Successful Response
+
+or
+
+Failure Contract
+
+No provider may directly
+modify pipeline state.
+
+</TERMINATION>
+
+</AETHERIS_PROVIDER_CONTRACT>
+```

@@ -1,0 +1,320 @@
+```xml
+<AETHERIS_REASONING_BUDGET version="1.0">
+
+<!-- ===================================================== -->
+<!--        DEVELOPMENT RESOURCE MANAGEMENT                -->
+<!-- ===================================================== -->
+
+<RESOURCE_MANAGER>
+
+The Resource Manager is NOT an AI agent.
+
+It is a deterministic execution controller.
+
+It SHALL NOT invoke any language model.
+
+It SHALL NOT consume inference tokens.
+
+Its responsibility is to allocate execution resources using
+local configuration and runtime telemetry.
+
+Primary Objectives
+
+• Minimize API usage
+• Minimize latency
+• Maximize free resource utilization
+• Respect provider rate limits
+• Maintain pipeline stability
+
+</RESOURCE_MANAGER>
+
+
+<!-- ===================================================== -->
+<!--             DEVELOPMENT EXECUTION MODE                -->
+<!-- ===================================================== -->
+
+<DEVELOPMENT_MODE>
+
+Current Environment
+
+Development
+
+Policy
+
+• Free APIs Only
+
+• No Premium Models
+
+• No Paid Fallbacks
+
+• No Automatic Upgrades
+
+• Prefer locally configured providers
+
+If no compatible free provider exists:
+
+Return
+
+RESOURCE_UNAVAILABLE
+
+Do not silently substitute paid services.
+
+</DEVELOPMENT_MODE>
+
+
+<!-- ===================================================== -->
+<!--            FREE MODEL CAPABILITY MATCHING             -->
+<!-- ===================================================== -->
+
+<MODEL_CAPABILITY_SELECTION>
+
+Never select models by name.
+
+Select using capabilities.
+
+Required Capabilities may include
+
+• Logical Reasoning
+
+• Creative Reasoning
+
+• Code Generation
+
+• Architecture Analysis
+
+• Mathematical Reasoning
+
+• Large Context
+
+• Fast Inference
+
+• Long Output
+
+The Conversation Director specifies
+required capabilities.
+
+The Resource Manager maps those
+capabilities to currently available
+free models.
+
+Model names are implementation details.
+
+Capabilities are architectural contracts.
+
+</MODEL_CAPABILITY_SELECTION>
+
+
+<!-- ===================================================== -->
+<!--              PROVIDER SELECTION                       -->
+<!-- ===================================================== -->
+
+<PROVIDER_SELECTION>
+
+Evaluate every available free provider.
+
+Selection order
+
+1.
+
+Provider Availability
+
+↓
+
+2.
+
+Remaining Rate Limit
+
+↓
+
+3.
+
+Remaining Token Budget
+
+↓
+
+4.
+
+Context Window
+
+↓
+
+5.
+
+Expected Latency
+
+↓
+
+6.
+
+Historical Reliability
+
+↓
+
+7.
+
+Task Compatibility
+
+Choose the highest ranked free provider.
+
+Never consider premium providers during
+Development Mode.
+
+</PROVIDER_SELECTION>
+
+
+<!-- ===================================================== -->
+<!--              RESOURCE ALLOCATION                      -->
+<!-- ===================================================== -->
+
+<RESOURCE_ALLOCATION>
+
+Allocate only the resources required.
+
+Simple Tasks
+
+↓
+
+Fast Mode
+
+↓
+
+Minimum Agents
+
+↓
+
+Minimum API Calls
+
+Complex Tasks
+
+↓
+
+Balanced Mode
+
+↓
+
+Additional Agents
+
+↓
+
+Additional Validation
+
+Critical Tasks
+
+↓
+
+Deep Mode
+
+↓
+
+Full Pipeline
+
+Only allocate resources justified
+by task complexity.
+
+</RESOURCE_ALLOCATION>
+
+
+<!-- ===================================================== -->
+<!--             RATE LIMIT MANAGEMENT                     -->
+<!-- ===================================================== -->
+
+<RATE_LIMIT_MANAGER>
+
+Monitor locally
+
+• Requests Per Minute
+
+• Requests Per Day
+
+• Tokens Per Minute
+
+• Context Usage
+
+• Provider Availability
+
+Predict exhaustion before it occurs.
+
+If limits approach configured thresholds
+
+↓
+
+Route to the next compatible free provider.
+
+Never wait for HTTP 429 responses
+before rerouting.
+
+</RATE_LIMIT_MANAGER>
+
+
+<!-- ===================================================== -->
+<!--              LATENCY MANAGEMENT                       -->
+<!-- ===================================================== -->
+
+<LATENCY_CONTROLLER>
+
+Each execution mode has a maximum
+wall-clock budget.
+
+Fast
+
+8 seconds
+
+Balanced
+
+20 seconds
+
+Deep
+
+45 seconds
+
+If remaining time is insufficient
+for the next pipeline stage
+
+↓
+
+Skip that stage
+
+↓
+
+Proceed with the best validated
+state available.
+
+Never exceed the configured
+latency budget.
+
+</LATENCY_CONTROLLER>
+
+
+<!-- ===================================================== -->
+<!--             RESOURCE REPORT                           -->
+<!-- ===================================================== -->
+
+<RESOURCE_REPORT>
+
+Return
+
+Execution Mode
+
+Allocated Agents
+
+Provider Selected
+
+Estimated Latency
+
+Estimated API Calls
+
+Estimated Token Usage
+
+Fallback Used
+
+Pipeline Budget Status
+
+This report is for orchestration only.
+
+It is not shown directly to end users.
+
+</RESOURCE_REPORT>
+
+</AETHERIS_REASONING_BUDGET>
+```
+

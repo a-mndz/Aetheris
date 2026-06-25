@@ -1,0 +1,313 @@
+```xml
+<!-- ===================================================== -->
+<!--             DECISION GATE ARCHITECTURE                -->
+<!-- ===================================================== -->
+
+<DECISION_GATE_ENGINE>
+
+The Reasoning Fusion Engine SHALL NOT determine the final output using
+weighted averages or highest-score selection.
+
+The objective is NOT to find the "best" answer.
+
+The objective is to construct the most defensible answer from individually
+validated reasoning components.
+
+Decision making follows a deterministic gate sequence.
+
+------------------------------------------------------------
+
+Gate 1
+
+Schema Integrity
+
+Verify:
+
+• Required fields exist
+
+• JSON is valid
+
+• No malformed outputs
+
+Failure:
+
+Reject input.
+
+------------------------------------------------------------
+
+Gate 2
+
+Pipeline Integrity
+
+Verify:
+
+• All mandatory agents completed
+
+• No critical execution failures
+
+• No adaptive loop corruption
+
+• No invalid rollback state
+
+Failure:
+
+Return failure contract.
+
+------------------------------------------------------------
+
+Gate 3
+
+Critical Risk Assessment
+
+Evaluate:
+
+• Breaker critical findings
+
+• Security risks
+
+• Safety violations
+
+• Architecture failures
+
+• Consensus Collapse
+
+• Correlation Amplification
+
+If any critical issue exists:
+
+Reject affected claims.
+
+Do not continue using them.
+
+------------------------------------------------------------
+
+Gate 4
+
+Logical Validation
+
+Consume:
+
+Judge Logic
+
+Verify:
+
+• Internal consistency
+
+• Requirement coverage
+
+• Instruction compliance
+
+• Reasoning quality
+
+Claims below validation threshold
+
+↓
+
+Reject.
+
+------------------------------------------------------------
+
+Gate 5
+
+Factual Validation
+
+Consume:
+
+Judge Factual
+
+Evaluate:
+
+• Claim verification
+
+• Evidence strength
+
+• Hallucination candidates
+
+• Knowledge gaps
+
+• External verification requirement
+
+Unverified claims
+
+↓
+
+Mark
+
+REQUIRES_VERIFICATION
+
+Do not silently approve.
+
+------------------------------------------------------------
+
+Gate 6
+
+Knowledge Boundary
+
+If
+
+Knowledge Absence
+
+or
+
+Validation Reliability Limited
+
+↓
+
+Suppress synthesis.
+
+Return:
+
+Knowledge Boundary Detected
+
+External verification recommended.
+
+------------------------------------------------------------
+
+Gate 7
+
+Claim Dependency Resolution
+
+Build the Reasoning Knowledge Graph.
+
+For every claim:
+
+Determine
+
+Supports
+
+Depends On
+
+Contradicts
+
+Extends
+
+Rejects
+
+If a parent claim fails,
+
+propagate confidence reduction
+
+through dependent claims.
+
+Never evaluate claims in isolation.
+
+------------------------------------------------------------
+
+Gate 8
+
+Claim Decision
+
+Each claim receives exactly one status.
+
+APPROVED
+
+REJECTED
+
+REQUIRES_VERIFICATION
+
+INSUFFICIENT_EVIDENCE
+
+CONFLICTING
+
+UNKNOWN
+
+Entire answers are NEVER accepted or rejected.
+
+Only claims.
+
+------------------------------------------------------------
+
+Gate 9
+
+Alternative Preservation
+
+Rejected reasoning
+
+shall NOT be discarded.
+
+Store:
+
+Reason
+
+Responsible agent
+
+Judge findings
+
+Breaker findings
+
+Possible recovery path
+
+Alternative reasoning remains available
+for adaptive loops.
+
+------------------------------------------------------------
+
+Gate 10
+
+Narrative Generation
+
+Generate the final response ONLY from
+
+APPROVED
+
+claims.
+
+Preserve
+
+• uncertainty
+
+• disagreement
+
+• alternative interpretations
+
+• knowledge gaps
+
+Never invent transitions.
+
+Never introduce new reasoning.
+
+Never increase certainty.
+
+Narrative follows the Decision Graph.
+
+Not vice versa.
+
+------------------------------------------------------------
+
+Gate 11
+
+Decision Contract
+
+Produce a structured contract.
+
+Required fields:
+
+Decision
+
+Accepted Claims
+
+Rejected Claims
+
+Verification Required
+
+Knowledge Gaps
+
+Critical Findings
+
+Reasoning Health
+
+Pipeline Completion
+
+Confidence Tier
+
+Warnings
+
+Adaptive Loop Required
+
+The Decision Contract is the authoritative output.
+
+The narrative is only a human-readable representation.
+
+</DECISION_GATE_ENGINE>
+```
+

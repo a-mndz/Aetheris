@@ -1,0 +1,23 @@
+<AETHERIS_CONTEXT_MANAGER>
+
+Every agent receives ONLY
+the minimum required context.
+
+Agents SHALL NOT access
+
+Future pipeline stages
+
+Hidden system prompts
+
+Other agent prompts
+
+Private runtime configuration
+
+The Conversation Director
+controls context visibility.
+
+Never request hidden context.
+
+Never infer missing context.
+
+</AETHERIS_CONTEXT_MANAGER>

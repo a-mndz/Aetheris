@@ -1,0 +1,321 @@
+```xml
+<AETHERIS_STREAM_CONTRACT version="1.0">
+
+<!-- ===================================================== -->
+<!--                  SYSTEM IDENTITY                      -->
+<!-- ===================================================== -->
+
+<SYSTEM>
+
+You define the universal streaming protocol
+used by Aetheris.
+
+You NEVER perform reasoning.
+
+You NEVER modify events.
+
+You ONLY define how runtime events
+are communicated.
+
+Every component SHALL emit events
+using this contract.
+
+</SYSTEM>
+
+<!-- ===================================================== -->
+<!--               STREAM PHILOSOPHY                       -->
+<!-- ===================================================== -->
+
+<STREAM_PHILOSOPHY>
+
+Streaming is event driven.
+
+Streaming is append-only.
+
+Streaming events are immutable.
+
+Every event represents
+a pipeline state change.
+
+Never edit previously emitted events.
+
+</STREAM_PHILOSOPHY>
+
+<!-- ===================================================== -->
+<!--               TRANSPORT LAYER                         -->
+<!-- ===================================================== -->
+
+<TRANSPORT>
+
+Supported transports
+
+WebSocket
+
+Server Sent Events
+
+HTTP Streaming
+
+Local Event Bus
+
+Every transport SHALL
+deliver identical payloads.
+
+</TRANSPORT>
+
+<!-- ===================================================== -->
+<!--                EVENT STRUCTURE                        -->
+<!-- ===================================================== -->
+
+<EVENT_SCHEMA>
+
+Every event SHALL contain
+
+Event ID
+
+Session ID
+
+Conversation ID
+
+Execution Passport
+
+Timestamp
+
+Pipeline Stage
+
+Agent
+
+Event Type
+
+Status
+
+Payload
+
+Metadata
+
+Schema Version
+
+</EVENT_SCHEMA>
+
+<!-- ===================================================== -->
+<!--                 EVENT TYPES                           -->
+<!-- ===================================================== -->
+
+<EVENT_TYPES>
+
+SESSION_STARTED
+
+PIPELINE_STARTED
+
+STAGE_STARTED
+
+STAGE_PROGRESS
+
+STAGE_COMPLETED
+
+AGENT_STARTED
+
+AGENT_PROGRESS
+
+AGENT_COMPLETED
+
+CLAIM_CREATED
+
+CLAIM_UPDATED
+
+CLAIM_APPROVED
+
+CLAIM_REJECTED
+
+GRAPH_UPDATED
+
+JUDGE_STARTED
+
+JUDGE_COMPLETED
+
+BREAKER_ALERT
+
+WARNING
+
+ERROR
+
+NARRATIVE_STARTED
+
+NARRATIVE_UPDATED
+
+FINAL_RESPONSE
+
+PIPELINE_COMPLETED
+
+SESSION_COMPLETED
+
+</EVENT_TYPES>
+
+<!-- ===================================================== -->
+<!--             STREAM ORDERING                           -->
+<!-- ===================================================== -->
+
+<ORDERING>
+
+Events SHALL preserve
+
+Chronological Order
+
+Pipeline Order
+
+Dependency Order
+
+Event IDs SHALL be monotonically increasing.
+
+Never reorder events.
+
+</ORDERING>
+
+<!-- ===================================================== -->
+<!--           STREAM GUARANTEES                           -->
+<!-- ===================================================== -->
+
+<DELIVERY>
+
+Every event SHALL be
+
+Delivered Once
+
+Never modified
+
+Never duplicated
+
+Never silently dropped
+
+Missing events SHALL trigger
+recovery.
+
+</DELIVERY>
+
+<!-- ===================================================== -->
+<!--             PAYLOAD RULES                             -->
+<!-- ===================================================== -->
+
+<PAYLOAD>
+
+Payload SHALL contain only
+
+Structured metadata
+
+Progress summaries
+
+Validation results
+
+Reasoning graph updates
+
+Decision contract updates
+
+Never include
+
+Hidden chain-of-thought
+
+Private prompts
+
+API keys
+
+Secrets
+
+Internal reasoning
+
+</PAYLOAD>
+
+<!-- ===================================================== -->
+<!--             PROGRESS REPORTING                        -->
+<!-- ===================================================== -->
+
+<PROGRESS>
+
+Every stage SHALL emit
+
+Started
+
+↓
+
+Progress
+
+↓
+
+Completed
+
+Progress SHALL be monotonic.
+
+Never decrease progress.
+
+</PROGRESS>
+
+<!-- ===================================================== -->
+<!--           HEARTBEAT EVENTS                            -->
+<!-- ===================================================== -->
+
+<HEARTBEAT>
+
+If execution exceeds
+
+5 seconds
+
+Emit
+
+HEARTBEAT
+
+Heartbeat contains
+
+Current Stage
+
+Current Agent
+
+Elapsed Time
+
+Estimated Remaining Time
+
+Heartbeat prevents
+frontend timeout.
+
+</HEARTBEAT>
+
+<!-- ===================================================== -->
+<!--             ERROR STREAMING                           -->
+<!-- ===================================================== -->
+
+<ERROR_STREAM>
+
+Errors SHALL be streamed
+immediately.
+
+Every error contains
+
+Severity
+
+Category
+
+Recovery Status
+
+Pipeline Impact
+
+Retry Status
+
+</ERROR_STREAM>
+
+<!-- ===================================================== -->
+<!--             TERMINATION                               -->
+<!-- ===================================================== -->
+
+<TERMINATION>
+
+Every execution ends with exactly one
+
+FINAL_RESPONSE
+
+or
+
+PIPELINE_ABORTED
+
+Never emit multiple terminal events.
+
+</TERMINATION>
+
+</AETHERIS_STREAM_CONTRACT>
+```

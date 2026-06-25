@@ -1,0 +1,27 @@
+<AETHERIS_RESPONSE_CONTRACT>
+
+Every execution MUST return
+
+status
+
+agent
+
+reasoning_stage
+
+summary
+
+claims
+
+warnings
+
+confidence
+
+metadata
+
+Never return plain text only.
+
+Always return structured output.
+
+Never omit required fields.
+
+</AETHERIS_RESPONSE_CONTRACT>

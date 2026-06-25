@@ -1,0 +1,443 @@
+```xml
+<AETHERIS_JSON_SCHEMA version="4.0">
+
+<!-- ===================================================== -->
+<!--                  SYSTEM IDENTITY                      -->
+<!-- ===================================================== -->
+
+<SYSTEM>
+
+This document defines the canonical
+communication protocol of Aetheris.
+
+Every agent.
+
+Every judge.
+
+Every pipeline stage.
+
+Every streaming event.
+
+Every API response.
+
+Every adaptive loop.
+
+Every internal message.
+
+MUST conform to these schemas.
+
+No component may invent fields.
+
+No component may remove required fields.
+
+</SYSTEM>
+
+<!-- ===================================================== -->
+<!--                   CORE PRINCIPLE                      -->
+<!-- ===================================================== -->
+
+<CORE_PRINCIPLE>
+
+Natural language is presentation.
+
+JSON is truth.
+
+Every reasoning artifact
+must first exist as structured data.
+
+Human readable text
+is generated afterwards.
+
+</CORE_PRINCIPLE>
+
+<!-- ===================================================== -->
+<!--              UNIVERSAL ENVELOPE                       -->
+<!-- ===================================================== -->
+
+<UNIVERSAL_MESSAGE>
+
+Every message SHALL contain
+
+schema_version
+
+message_id
+
+session_id
+
+conversation_id
+
+timestamp
+
+component
+
+message_type
+
+payload
+
+metadata
+
+validation
+
+No exceptions.
+
+</UNIVERSAL_MESSAGE>
+
+<!-- ===================================================== -->
+<!--              AGENT SCHEMA                             -->
+<!-- ===================================================== -->
+
+<AGENT_SCHEMA>
+
+Required
+
+agent_name
+
+agent_role
+
+iteration
+
+execution_time
+
+status
+
+claims
+
+warnings
+
+confidence
+
+reasoning_state
+
+metadata
+
+</AGENT_SCHEMA>
+
+<!-- ===================================================== -->
+<!--              CLAIM SCHEMA                             -->
+<!-- ===================================================== -->
+
+<CLAIM_SCHEMA>
+
+Every claim contains
+
+claim_id
+
+fingerprint
+
+type
+
+summary
+
+content
+
+source_agent
+
+loop
+
+dependencies
+
+supports
+
+contradicts
+
+evidence
+
+confidence
+
+validation
+
+risk
+
+status
+
+version
+
+</CLAIM_SCHEMA>
+
+<!-- ===================================================== -->
+<!--              JUDGE SCHEMA                             -->
+<!-- ===================================================== -->
+
+<JUDGE_SCHEMA>
+
+judge
+
+logic_score
+
+factual_score
+
+accepted_claims
+
+rejected_claims
+
+verification_required
+
+warnings
+
+reasoning_health
+
+notes
+
+</JUDGE_SCHEMA>
+
+<!-- ===================================================== -->
+<!--              BREAKER SCHEMA                           -->
+<!-- ===================================================== -->
+
+<BREAKER_SCHEMA>
+
+critical_findings
+
+high_findings
+
+medium_findings
+
+low_findings
+
+consensus_collapse
+
+correlation_risk
+
+bias_risk
+
+hallucination_risk
+
+recommendation
+
+</BREAKER_SCHEMA>
+
+<!-- ===================================================== -->
+<!--              REASONING GRAPH                          -->
+<!-- ===================================================== -->
+
+<RKG_SCHEMA>
+
+graph_id
+
+nodes
+
+edges
+
+graph_health
+
+orphan_nodes
+
+broken_dependencies
+
+cycles
+
+version
+
+</RKG_SCHEMA>
+
+<!-- ===================================================== -->
+<!--              DECISION CONTRACT                        -->
+<!-- ===================================================== -->
+
+<DECISION_CONTRACT>
+
+decision
+
+accepted_claims
+
+rejected_claims
+
+verification_required
+
+knowledge_boundary
+
+warnings
+
+reasoning_health
+
+confidence_tier
+
+pipeline_completion
+
+graph_health
+
+termination_reason
+
+</DECISION_CONTRACT>
+
+<!-- ===================================================== -->
+<!--              STREAMING SCHEMA                         -->
+<!-- ===================================================== -->
+
+<STREAM_SCHEMA>
+
+event_id
+
+event_type
+
+pipeline_stage
+
+agent
+
+status
+
+progress
+
+timestamp
+
+payload
+
+severity
+
+</STREAM_SCHEMA>
+
+<!-- ===================================================== -->
+<!--              ADAPTIVE LOOP SCHEMA                     -->
+<!-- ===================================================== -->
+
+<LOOP_SCHEMA>
+
+loop
+
+reason
+
+trigger
+
+changes
+
+improvements
+
+regressions
+
+decision
+
+</LOOP_SCHEMA>
+
+<!-- ===================================================== -->
+<!--              RESOURCE MANAGER                         -->
+<!-- ===================================================== -->
+
+<RESOURCE_SCHEMA>
+
+execution_mode
+
+providers
+
+models
+
+latency_budget
+
+api_calls
+
+fallbacks
+
+retries
+
+token_usage
+
+</RESOURCE_SCHEMA>
+
+<!-- ===================================================== -->
+<!--              FINAL OUTPUT                             -->
+<!-- ===================================================== -->
+
+<OUTPUT_SCHEMA>
+
+metadata
+
+pipeline
+
+primary_answer
+
+supporting_claims
+
+warnings
+
+alternatives
+
+knowledge_gaps
+
+recommendations
+
+reasoning_metadata
+
+developer_metadata
+
+</OUTPUT_SCHEMA>
+
+<!-- ===================================================== -->
+<!--              VALIDATION RULES                         -->
+<!-- ===================================================== -->
+
+<VALIDATION_RULES>
+
+Reject
+
+Missing required field
+
+Unknown field
+
+Incorrect datatype
+
+Duplicate identifiers
+
+Broken references
+
+Invalid enum
+
+Malformed payload
+
+Reject immediately.
+
+Never auto-correct.
+
+</VALIDATION_RULES>
+
+<!-- ===================================================== -->
+<!--              SCHEMA VERSIONING                        -->
+<!-- ===================================================== -->
+
+<SCHEMA_VERSIONING>
+
+Every payload contains
+
+schema_version
+
+Major Version
+
+Breaking change
+
+Minor Version
+
+Backward compatible
+
+Patch
+
+Documentation only
+
+Components with incompatible
+versions SHALL refuse communication.
+
+</SCHEMA_VERSIONING>
+
+<!-- ===================================================== -->
+<!--         INTERFACE DEFINITION LANGUAGE (IDL)           -->
+<!-- ===================================================== -->
+
+<IDL_DEFINITION>
+
+Every Aetheris message should be generated from a single Interface Definition Language (IDL).
+
+IDL Pipeline:
+
+IDL
+ │
+ ├──► JSON Schema
+ ├──► Python Models
+ ├──► TypeScript Interfaces
+ ├──► Rust Structs
+ ├──► Go Structs
+ ├──► OpenAPI
+ └──► Documentation
+
+Maintain a single source of truth rather than manually maintaining separate structures.
+
+</IDL_DEFINITION>
+
+</AETHERIS_JSON_SCHEMA>
+```

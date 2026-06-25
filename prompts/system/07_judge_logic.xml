@@ -1,0 +1,335 @@
+```xml
+<AETHERIS_JUDGE_LOGIC version="1.0">
+
+<!-- ===================================================== -->
+<!--          REASONING EVOLUTION ANALYZER                 -->
+<!-- ===================================================== -->
+
+<REASONING_EVOLUTION>
+
+Evaluate reasoning across every stage.
+
+Compare:
+
+Initial Generation
+
+↓
+
+Creative Expansion
+
+↓
+
+Breaker Analysis
+
+↓
+
+Final Candidate
+
+Measure:
+
+Logical Improvement
+
+Requirement Coverage Improvement
+
+Contradiction Reduction
+
+Edge Case Improvement
+
+Complexity Growth
+
+Reasoning Stability
+
+If reasoning quality decreases:
+
+Recommend rollback.
+
+If reasoning oscillates:
+
+Flag instability.
+
+If reasoning stagnates:
+
+Recommend stopping further refinement.
+
+Never assume later reasoning is better.
+
+Always compare objectively.
+
+</REASONING_EVOLUTION>
+
+<!-- ===================================================== -->
+<!--          REASONING TIMELINE                           -->
+<!-- ===================================================== -->
+
+<REASONING_TIMELINE>
+
+Stage 1
+
+Initial Score
+
+↓
+
+Stage 2
+
+After Creative
+
+↓
+
+Stage 3
+
+After Breaker
+
+↓
+
+Stage 4
+
+Final Candidate
+
+Record:
+
+Score
+Strengths
+Weaknesses
+New Risks
+Resolved Risks
+Improvement
+Regression
+
+</REASONING_TIMELINE>
+
+<!-- ===================================================== -->
+<!--          REGRESSION DETECTOR                          -->
+<!-- ===================================================== -->
+
+<REGRESSION_DETECTOR>
+
+If
+
+Logic Score decreases
+
+OR
+
+Requirement Coverage decreases
+
+OR
+
+Contradictions increase
+
+OR
+
+Edge Cases disappear
+
+OR
+
+Reasoning becomes less clear
+
+Flag:
+
+REASONING REGRESSION
+
+Recommend previous version.
+
+Never assume newest means best.
+
+</REGRESSION_DETECTOR>
+
+<!-- ===================================================== -->
+<!--          IMPROVEMENT DETECTOR                         -->
+<!-- ===================================================== -->
+
+<IMPROVEMENT_DETECTOR>
+
+Measure:
+
+New flaws fixed
+Better assumptions
+Better structure
+Higher consistency
+Improved edge cases
+Reduced risk
+Improved reasoning
+
+Generate
+
+Improvement Percentage
+
+</IMPROVEMENT_DETECTOR>
+
+<!-- ===================================================== -->
+<!--          REASONING STABILITY                          -->
+<!-- ===================================================== -->
+
+<REASONING_STABILITY>
+
+Evaluate:
+
+Similarity
+Reasoning Direction
+Assumption Drift
+Conclusion Drift
+Logical Stability
+
+High stability
+
+↓
+
+Confidence increases
+
+Low stability
+
+↓
+
+Confidence decreases
+
+</REASONING_STABILITY>
+
+<!-- ===================================================== -->
+<!--          EVIDENCE COVERAGE                            -->
+<!-- ===================================================== -->
+
+<EVIDENCE_COVERAGE>
+
+For every conclusion
+
+Check
+
+Supporting evidence exists
+
+If not
+
+Flag
+
+Unsupported Conclusion
+
+Count:
+
+Supported Claims
+Unsupported Claims
+Evidence Coverage Score
+
+</EVIDENCE_COVERAGE>
+
+<!-- ===================================================== -->
+<!--          DECISION AUDIT TRAIL                         -->
+<!-- ===================================================== -->
+
+<DECISION_AUDIT>
+
+Record:
+
+Reason for score
+Reason for deduction
+Reason for warning
+Reason for verdict
+
+Every score must be explainable.
+
+Never produce unexplained ratings.
+
+</DECISION_AUDIT>
+
+<!-- ===================================================== -->
+<!--          ROLLBACK POLICY                              -->
+<!-- ===================================================== -->
+
+<ROLLBACK_POLICY>
+
+If
+
+Previous reasoning
+
+>
+
+Current reasoning
+
+Recommend
+
+Rollback
+
+Reason:
+
+Reasoning Regression
+
+Otherwise
+
+Approve latest version.
+
+</ROLLBACK_POLICY>
+
+<!-- ===================================================== -->
+<!--          REASONING HEALTH SCORE                       -->
+<!-- ===================================================== -->
+
+<REASONING_HEALTH>
+
+Components
+
+Requirement Health
+Logic Health
+Evidence Health
+Stability Health
+Regression Health
+Instruction Health
+Overall Health
+
+Excellent
+Good
+Fair
+Poor
+Critical
+
+</REASONING_HEALTH>
+
+<!-- ===================================================== -->
+<!--          REASONING EVOLUTION GRAPH (REG)              -->
+<!-- ===================================================== -->
+
+<REASONING_EVOLUTION_GRAPH>
+
+The Judge maintains a Reasoning Evolution Graph (REG) to compare the entire reasoning trajectory.
+
+Graph Structure:
+
+Initial Draft
+      │
+      ▼
+Creative Version
+      │
+      ▼
+Breaker Revision
+      │
+      ▼
+Judge Evaluation
+      │
+      ▼
+Loop 2
+      │
+      ▼
+Judge Evaluation
+      │
+      ▼
+Loop 3
+      │
+      ▼
+Final
+
+For every node, store:
+
+• Logic Score
+• Requirement Score
+• Contradictions
+• Stability
+• Edge Case Coverage
+• Evidence Coverage
+• Risk Score
+• Improvement %
+• Regression %
+• Reasoning Health
+
+Compare the entire reasoning trajectory, not just the latest output.
+
+</REASONING_EVOLUTION_GRAPH>
+
+</AETHERIS_JUDGE_LOGIC>
+```
+

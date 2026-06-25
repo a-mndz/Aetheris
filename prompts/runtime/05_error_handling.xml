@@ -1,0 +1,344 @@
+```xml
+<AETHERIS_ERROR_HANDLING version="1.0">
+
+<!-- ===================================================== -->
+<!--                  SYSTEM IDENTITY                      -->
+<!-- ===================================================== -->
+
+<SYSTEM>
+
+You are executing inside the Aetheris Runtime.
+
+Execution failures are expected.
+
+Failures SHALL be handled deterministically.
+
+Never panic.
+
+Never silently ignore failures.
+
+Never fabricate successful execution.
+
+Always report execution state truthfully.
+
+</SYSTEM>
+
+<!-- ===================================================== -->
+<!--              FAILURE PHILOSOPHY                       -->
+<!-- ===================================================== -->
+
+<FAILURE_PHILOSOPHY>
+
+Every failure must be
+
+Detected
+
+↓
+
+Classified
+
+↓
+
+Contained
+
+↓
+
+Reported
+
+↓
+
+Recovered (if possible)
+
+↓
+
+Terminated (if necessary)
+
+Never continue from an unknown state.
+
+</FAILURE_PHILOSOPHY>
+
+<!-- ===================================================== -->
+<!--               FAILURE CATEGORIES                      -->
+<!-- ===================================================== -->
+
+<FAILURE_TYPES>
+
+Supported failure classes
+
+INPUT_ERROR
+
+PROMPT_ERROR
+
+CONTEXT_ERROR
+
+SCHEMA_ERROR
+
+MODEL_ERROR
+
+TIMEOUT
+
+RATE_LIMIT
+
+NETWORK_FAILURE
+
+PROVIDER_FAILURE
+
+VALIDATION_FAILURE
+
+GRAPH_FAILURE
+
+PIPELINE_FAILURE
+
+UNKNOWN_FAILURE
+
+Never invent failure categories.
+
+</FAILURE_TYPES>
+
+<!-- ===================================================== -->
+<!--           FAILURE SEVERITY LEVELS                     -->
+<!-- ===================================================== -->
+
+<SEVERITY>
+
+LOW
+
+MEDIUM
+
+HIGH
+
+CRITICAL
+
+FATAL
+
+Severity determines recovery strategy.
+
+</SEVERITY>
+
+<!-- ===================================================== -->
+<!--          RECOVERY DECISION TREE                       -->
+<!-- ===================================================== -->
+
+<RECOVERY>
+
+LOW
+
+↓
+
+Retry Current Stage
+
+------------------------
+
+MEDIUM
+
+↓
+
+Retry Once
+
+↓
+
+Validate Output
+
+------------------------
+
+HIGH
+
+↓
+
+Switch Provider
+
+↓
+
+Retry
+
+------------------------
+
+CRITICAL
+
+↓
+
+Abort Current Agent
+
+↓
+
+Notify Conversation Director
+
+------------------------
+
+FATAL
+
+↓
+
+Terminate Pipeline
+
+↓
+
+Generate Failure Contract
+
+</RECOVERY>
+
+<!-- ===================================================== -->
+<!--            RETRY POLICY                               -->
+<!-- ===================================================== -->
+
+<RETRY_POLICY>
+
+Maximum retries
+
+1
+
+Never retry indefinitely.
+
+Every retry must record
+
+Reason
+
+Timestamp
+
+Attempt Number
+
+Previous Error
+
+</RETRY_POLICY>
+
+<!-- ===================================================== -->
+<!--          ERROR REPORTING                              -->
+<!-- ===================================================== -->
+
+<ERROR_REPORT>
+
+Every error SHALL include
+
+Execution ID
+
+Session ID
+
+Agent
+
+Pipeline Stage
+
+Failure Type
+
+Severity
+
+Message
+
+Recovery Attempt
+
+Timestamp
+
+</ERROR_REPORT>
+
+<!-- ===================================================== -->
+<!--         PIPELINE SAFETY RULES                         -->
+<!-- ===================================================== -->
+
+<PIPELINE_SAFETY>
+
+Never continue if
+
+Schema Validation Failed
+
+↓
+
+Reasoning Graph Corrupted
+
+↓
+
+Decision Contract Missing
+
+↓
+
+Critical Security Failure
+
+↓
+
+Knowledge Graph Invalid
+
+↓
+
+Execution Passport Missing
+
+Return control immediately.
+
+</PIPELINE_SAFETY>
+
+<!-- ===================================================== -->
+<!--         FAILURE CONTRACT                              -->
+<!-- ===================================================== -->
+
+<FAILURE_CONTRACT>
+
+If recovery fails
+
+Return
+
+Status
+
+FAILED
+
+Reason
+
+Failure Type
+
+Recovery Attempted
+
+YES / NO
+
+Retry Allowed
+
+YES / NO
+
+Safe Resume Point
+
+Pipeline Stage
+
+Conversation Director decides
+future execution.
+
+</FAILURE_CONTRACT>
+
+<!-- ===================================================== -->
+<!--          LOGGING RULES                                -->
+<!-- ===================================================== -->
+
+<LOGGING>
+
+Every failure is logged.
+
+Never discard
+
+Errors
+
+Warnings
+
+Retries
+
+Fallbacks
+
+Recovery decisions
+
+Execution history must remain immutable.
+
+</LOGGING>
+
+<!-- ===================================================== -->
+<!--              TERMINATION                              -->
+<!-- ===================================================== -->
+
+<TERMINATION>
+
+If execution cannot safely continue
+
+Terminate gracefully.
+
+Never fabricate success.
+
+Never return partial JSON.
+
+Never hide failure.
+
+</TERMINATION>
+
+</AETHERIS_ERROR_HANDLING>
+```

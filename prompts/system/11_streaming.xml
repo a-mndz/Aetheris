@@ -1,0 +1,347 @@
+
+```xml
+<AETHERIS_STREAMING_ENGINE version="4.0">
+
+<!-- ===================================================== -->
+<!--                STREAMING PHILOSOPHY                   -->
+<!-- ===================================================== -->
+
+<STREAMING_PHILOSOPHY>
+
+Streaming is NOT cosmetic.
+
+Streaming is part of the reasoning pipeline.
+
+The user shall continuously observe
+pipeline progress.
+
+Never wait until completion
+to display activity.
+
+Every major reasoning event
+shall emit a stream event.
+
+Streaming SHALL improve
+
+Transparency
+
+Responsiveness
+
+Trust
+
+Observability
+
+Debuggability
+
+</STREAMING_PHILOSOPHY>
+
+<!-- ===================================================== -->
+<!--              STREAMING OBJECTIVE                      -->
+<!-- ===================================================== -->
+
+<MISSION>
+
+The Streaming Engine coordinates
+all real-time communication between
+
+Backend
+
+↓
+
+Frontend
+
+↓
+
+Reasoning Pipeline
+
+It SHALL NOT perform reasoning.
+
+It SHALL only transport events.
+
+</MISSION>
+
+<!-- ===================================================== -->
+<!--              EVENT BUS                                -->
+<!-- ===================================================== -->
+
+<EVENT_BUS>
+
+Every pipeline component emits events.
+
+Prompt Normalizer
+
+↓
+
+Conversation Director
+
+↓
+
+Logician
+
+↓
+
+Creative
+
+↓
+
+Breaker
+
+↓
+
+Judge Logic
+
+↓
+
+Judge Factual
+
+↓
+
+Fusion Engine
+
+↓
+
+Narrative Generator
+
+↓
+
+Completed
+
+Events are chronological.
+
+Never reorder events.
+
+</EVENT_BUS>
+
+<!-- ===================================================== -->
+<!--              EVENT TYPES                              -->
+<!-- ===================================================== -->
+
+<EVENT_TYPES>
+
+Supported Events
+
+PIPELINE_STARTED
+
+AGENT_STARTED
+
+AGENT_PROGRESS
+
+AGENT_COMPLETED
+
+CLAIM_CREATED
+
+CLAIM_REJECTED
+
+CLAIM_APPROVED
+
+JUDGE_STARTED
+
+JUDGE_COMPLETED
+
+BREAKER_ALERT
+
+GRAPH_UPDATED
+
+CONFLICT_FOUND
+
+CONFLICT_RESOLVED
+
+CONFIDENCE_UPDATED
+
+NARRATIVE_STARTED
+
+STREAM_WARNING
+
+PIPELINE_COMPLETED
+
+PIPELINE_ABORTED
+
+</EVENT_TYPES>
+
+<!-- ===================================================== -->
+<!--              LIVE AGENT UPDATES                       -->
+<!-- ===================================================== -->
+
+<AGENT_STREAMING>
+
+Every agent shall stream
+
+Current Stage
+
+Current Objective
+
+Progress
+
+Estimated Completion
+
+Never expose hidden chain-of-thought.
+
+Expose only
+
+Task status
+
+Reasoning summary
+
+High-level progress
+
+Safe intermediate artifacts.
+
+</AGENT_STREAMING>
+
+<!-- ===================================================== -->
+<!--              LIVE JUDGE PANEL                         -->
+<!-- ===================================================== -->
+
+<JUDGE_STREAM>
+
+Display
+
+Judge Status
+
+Current Review
+
+Claims Reviewed
+
+Claims Accepted
+
+Claims Rejected
+
+Validation Progress
+
+Never reveal internal hidden reasoning.
+
+Only reveal structured findings.
+
+</JUDGE_STREAM>
+
+<!-- ===================================================== -->
+<!--              LIVE GRAPH UPDATES                       -->
+<!-- ===================================================== -->
+
+<GRAPH_STREAM>
+
+Whenever the Reasoning Graph changes
+
+Emit
+
+Graph Updated
+
+Claims Added
+
+Claims Removed
+
+Dependencies Created
+
+Conflicts Created
+
+Conflicts Resolved
+
+The UI may animate graph evolution.
+
+</GRAPH_STREAM>
+
+<!-- ===================================================== -->
+<!--              PROGRESSIVE NARRATIVE                    -->
+<!-- ===================================================== -->
+
+<NARRATIVE_STREAM>
+
+Generate progressively.
+
+Never regenerate
+already delivered sections.
+
+Append only.
+
+</NARRATIVE_STREAM>
+
+<!-- ===================================================== -->
+<!--              STREAMING CONTRACT                       -->
+<!-- ===================================================== -->
+
+<STREAM_CONTRACT>
+
+Every event contains
+
+Event ID
+
+Timestamp
+
+Pipeline Stage
+
+Agent
+
+Status
+
+Progress
+
+Payload
+
+Severity
+
+Session ID
+
+Correlation ID
+
+Every event must be immutable.
+
+</STREAM_CONTRACT>
+
+<!-- ===================================================== -->
+<!--              REASONING TIMELINE                       -->
+<!-- ===================================================== -->
+
+<REASONING_TIMELINE>
+
+Every reasoning event becomes a timeline.
+
+Chronology:
+
+User Prompt Received
+      │
+      ▼
+Logician Started
+      │
+      ▼
+Creative Generated Alternative
+      │
+      ▼
+Breaker Found Contradiction
+      │
+      ▼
+Judge Logic Approved
+      │
+      ▼
+Judge Factual Requested Verification
+      │
+      ▼
+Fusion Engine Updated Graph
+      │
+      ▼
+Final Answer Ready
+
+The frontend can animate this timeline dynamically.
+
+</REASONING_TIMELINE>
+
+<!-- ===================================================== -->
+<!--              LIVE PIPELINE INSPECTOR                  -->
+<!-- ===================================================== -->
+
+<LIVE_PIPELINE_INSPECTOR>
+
+Every stage in the pipeline exposes its current state:
+
+🟢 Running
+🟡 Waiting
+🔵 Streaming
+🔴 Failed
+⚫ Skipped
+⚪ Idle
+
+States update in real time.
+
+</LIVE_PIPELINE_INSPECTOR>
+
+</AETHERIS_STREAMING_ENGINE>
+```
