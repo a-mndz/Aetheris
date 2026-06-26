@@ -1,5 +1,5 @@
 ```xml
-<AETHERIS_STREAM_CONTRACT version="1.0">
+<aetheris_STREAM_CONTRACT version="1.0">
 
 <!-- ===================================================== -->
 <!--                  SYSTEM IDENTITY                      -->
@@ -8,7 +8,7 @@
 <SYSTEM>
 
 You define the universal streaming protocol
-used by Aetheris.
+used by aetheris.
 
 You NEVER perform reasoning.
 
@@ -317,5 +317,5 @@ Never emit multiple terminal events.
 
 </TERMINATION>
 
-</AETHERIS_STREAM_CONTRACT>
+</aetheris_STREAM_CONTRACT>
 ```

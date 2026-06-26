@@ -10,6 +10,20 @@ import { fetchProviderStatus } from './api/client';
 
 const HEALTH_POLL_INTERVAL = 30000; // 30 seconds
 
+function normalizeExecutionMode(data) {
+  if (data?.executionMode) return data.executionMode;
+
+  const mode = data?.mode?.toUpperCase?.();
+  const modeLabels = {
+    FREE: 'Fallback',
+    HYBRID: 'Multi-Agent',
+    PAID: 'Multi-Agent',
+    UNKNOWN: 'Multi-Agent',
+  };
+
+  return modeLabels[mode] || 'Multi-Agent';
+}
+
 export default function App() {
   // Auth check — must be before any hooks to satisfy React rules
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
@@ -28,6 +42,7 @@ export default function App() {
   const { send, stage, agentStates, partialData } = useSendQuery();
   const [telemetryOpen, setTelemetryOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [executionMode, setExecutionMode] = useState('Multi-Agent');
 
   const activeConversation = conversations[activeId];
   const pending = stage !== 'idle' && stage !== 'done' && stage !== 'error';
@@ -50,8 +65,9 @@ export default function App() {
       const data = await fetchProviderStatus();
       if (!active) return;
 
+      setExecutionMode(normalizeExecutionMode(data));
+
       if (data?.providers && Array.isArray(data.providers)) {
-        // Map backend provider data to the UI format
         const mapped = data.providers.map((p) => ({
           name: typeof p === 'string' ? p : (p.name || p.provider || 'Unknown'),
           status: typeof p === 'string' ? 'online' : (p.status || 'online'),
@@ -62,7 +78,6 @@ export default function App() {
         }
       }
 
-      // Fallback: show default providers as unknown status when backend is unreachable
       setProviderHealth([
         { name: 'Groq', status: 'unknown' },
         { name: 'OpenRouter', status: 'unknown' },
@@ -100,6 +115,7 @@ export default function App() {
       <div className="flex flex-1 flex-col min-w-0">
         <ProviderStatusBar
           providers={providerHealth}
+          executionMode={executionMode}
           onToggleTelemetry={() => setTelemetryOpen(true)}
           onToggleSidebar={() => setSidebarOpen(true)}
         />

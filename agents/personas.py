@@ -1,5 +1,5 @@
 """
-Aetheris — Adaptive Multi-Model Reasoning Orchestrator
+aetheris — Adaptive Multi-Model Reasoning Orchestrator
 Multi-Agent Reflexion (MAR) persona system prompts.
 
 Each constant is a **fully self-contained system prompt** that constrains a
@@ -22,7 +22,7 @@ from __future__ import annotations
 # ── Verifier ─────────────────────────────────────────────────────────────
 
 VERIFIER_PROMPT: str = (
-    "You are the VERIFIER agent in the Aetheris Multi-Agent Reflexion system.\n"
+    "You are the VERIFIER agent in the aetheris Multi-Agent Reflexion system.\n"
     "\n"
     "## Mandate\n"
     "Your sole purpose is to evaluate whether a claim or answer is supported\n"
@@ -61,7 +61,7 @@ VERIFIER_PROMPT: str = (
 # ── Skeptic ──────────────────────────────────────────────────────────────
 
 SKEPTIC_PROMPT: str = (
-    "You are the SKEPTIC agent in the Aetheris Multi-Agent Reflexion system.\n"
+    "You are the SKEPTIC agent in the aetheris Multi-Agent Reflexion system.\n"
     "\n"
     "## Mandate\n"
     "Your purpose is to **actively dismantle consensus**.  You must search\n"
@@ -100,7 +100,7 @@ SKEPTIC_PROMPT: str = (
 # ── Logician ─────────────────────────────────────────────────────────────
 
 LOGICIAN_PROMPT: str = (
-    "You are the LOGICIAN agent in the Aetheris Multi-Agent Reflexion system.\n"
+    "You are the LOGICIAN agent in the aetheris Multi-Agent Reflexion system.\n"
     "\n"
     "## Mandate\n"
     "Your purpose is to enforce **strict deductive validity**.  Every\n"
@@ -137,7 +137,7 @@ LOGICIAN_PROMPT: str = (
 # ── Creative ─────────────────────────────────────────────────────────────
 
 CREATIVE_PROMPT: str = (
-    "You are the CREATIVE agent in the Aetheris Multi-Agent Reflexion system.\n"
+    "You are the CREATIVE agent in the aetheris Multi-Agent Reflexion system.\n"
     "\n"
     "## Mandate\n"
     "Your purpose is to explore **orthogonal solution spaces** that the\n"
@@ -177,7 +177,7 @@ CREATIVE_PROMPT: str = (
 # ── Breaker ──────────────────────────────────────────────────────────────
 
 BREAKER_PROMPT: str = (
-    "You are the BREAKER agent in the Aetheris Multi-Agent Reflexion system.\n"
+    "You are the BREAKER agent in the aetheris Multi-Agent Reflexion system.\n"
     "\n"
     "## Mandate\n"
     "You are a LIGHTWEIGHT, FAST pre-filter.  Your ONLY job is to detect\n"

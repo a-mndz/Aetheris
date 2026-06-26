@@ -1,5 +1,5 @@
 ```xml
-<AETHERIS_REASONING_BUDGET version="1.0">
+<aetheris_REASONING_BUDGET version="1.0">
 
 <!-- ===================================================== -->
 <!--        DEVELOPMENT RESOURCE MANAGEMENT                -->
@@ -315,6 +315,6 @@ It is not shown directly to end users.
 
 </RESOURCE_REPORT>
 
-</AETHERIS_REASONING_BUDGET>
+</aetheris_REASONING_BUDGET>
 ```
 

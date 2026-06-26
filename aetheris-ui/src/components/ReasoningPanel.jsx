@@ -2,17 +2,21 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Brain, Palette, Scale, Shield } from 'lucide-react';
 import AgentThinkingCard from './AgentThinkingCard';
 import JudgePanel from './JudgePanel';
+import { panelVariants } from '../utils/animations';
+import { useSettingsStore } from '../store/useSettingsStore';
 
 export default function ReasoningPanel({ open, agentOutputs, decision }) {
+  const animationsEnabled = useSettingsStore((state) => state.animationsEnabled);
+
   return (
     <AnimatePresence initial={false}>
       {open && (
         <motion.div
           key="reasoning"
-          initial={{ height: 0, opacity: 0 }}
-          animate={{ height: 'auto', opacity: 1 }}
-          exit={{ height: 0, opacity: 0 }}
-          transition={{ duration: 0.3, ease: 'easeInOut' }}
+          initial="collapsed"
+          animate="expanded"
+          exit="collapsed"
+          variants={animationsEnabled ? panelVariants : undefined}
           className="overflow-hidden"
         >
           <div className="mt-4 space-y-3">

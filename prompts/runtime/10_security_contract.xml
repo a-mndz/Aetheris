@@ -1,5 +1,5 @@
 ```xml
-<AETHERIS_SECURITY_CONTRACT version="1.0">
+<aetheris_SECURITY_CONTRACT version="1.0">
 
 <!-- ===================================================== -->
 <!--                  SYSTEM IDENTITY                      -->
@@ -8,7 +8,7 @@
 <SYSTEM>
 
 The Security Contract protects the
-Aetheris runtime.
+aetheris runtime.
 
 It SHALL NOT perform reasoning.
 
@@ -359,5 +359,5 @@ determines further execution.
 
 </TERMINATION>
 
-</AETHERIS_SECURITY_CONTRACT>
+</aetheris_SECURITY_CONTRACT>
 ```

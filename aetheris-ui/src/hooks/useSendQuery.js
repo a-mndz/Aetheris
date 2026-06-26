@@ -12,7 +12,7 @@ function deriveErrorMessage(error) {
     return `Pipeline failed at ${error.stage}: ${error.message}`;
   }
   if (!error?.response) {
-    return 'Could not reach the Aetheris backend. Check that the server is running at the configured API base URL and that CORS is enabled for this origin.';
+    return 'Could not reach the aetheris backend. Check that the server is running at the configured API base URL and that CORS is enabled for this origin.';
   }
   const status = error.response.status;
   if (status >= 500) return `Backend error (${status}). The orchestrator failed while processing this query.`;
@@ -25,7 +25,7 @@ export function useSendQuery() {
   const updateMessage = useChatStore((s) => s.updateMessage);
   const addTelemetryEntry = useChatStore((s) => s.addTelemetryEntry);
   const getActiveConversation = useChatStore((s) => s.getActiveConversation);
-  const { stage, agentStates, partialData, run, reset } = usePipelineStages();
+  const { stage, agentStates, partialData, progress, elapsedMs, run, reset, abort } = usePipelineStages();
 
   const send = async (conversationId, query) => {
     const trimmed = query.trim();
@@ -83,5 +83,5 @@ export function useSendQuery() {
     setTimeout(() => reset(), 1500);
   };
 
-  return { send, stage, agentStates, partialData };
+  return { send, stage, agentStates, partialData, progress, elapsedMs, abort };
 }

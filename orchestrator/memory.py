@@ -1,5 +1,5 @@
 """
-Aetheris — Adaptive Multi-Model Reasoning Orchestrator
+aetheris — Adaptive Multi-Model Reasoning Orchestrator
 Epistemic memory: failure-tracking bus for loop-failure avoidance.
 
 Tracks failed pipeline executions so subsequent runs for similar queries

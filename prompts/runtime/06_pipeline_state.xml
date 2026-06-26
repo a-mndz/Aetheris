@@ -1,5 +1,5 @@
 ```xml
-<AETHERIS_PIPELINE_STATE version="1.0">
+<aetheris_PIPELINE_STATE version="1.0">
 
 <!-- ===================================================== -->
 <!--                  SYSTEM IDENTITY                      -->
@@ -377,5 +377,5 @@ to Conversation Director.
 
 </TERMINATION>
 
-</AETHERIS_PIPELINE_STATE>
+</aetheris_PIPELINE_STATE>
 ```

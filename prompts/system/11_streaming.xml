@@ -1,6 +1,6 @@
 
 ```xml
-<AETHERIS_STREAMING_ENGINE version="4.0">
+<aetheris_STREAMING_ENGINE version="4.0">
 
 <!-- ===================================================== -->
 <!--                STREAMING PHILOSOPHY                   -->
@@ -343,5 +343,5 @@ States update in real time.
 
 </LIVE_PIPELINE_INSPECTOR>
 
-</AETHERIS_STREAMING_ENGINE>
+</aetheris_STREAMING_ENGINE>
 ```

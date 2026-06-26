@@ -1,5 +1,5 @@
 ```xml
-<AETHERIS_JUDGE_LOGIC version="1.0">
+<aetheris_JUDGE_LOGIC version="1.0">
 
 <!-- ===================================================== -->
 <!--          REASONING EVOLUTION ANALYZER                 -->
@@ -330,6 +330,6 @@ Compare the entire reasoning trajectory, not just the latest output.
 
 </REASONING_EVOLUTION_GRAPH>
 
-</AETHERIS_JUDGE_LOGIC>
+</aetheris_JUDGE_LOGIC>
 ```
 

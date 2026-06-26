@@ -1,4 +1,4 @@
-<AETHERIS_CONTEXT_MANAGER>
+<aetheris_CONTEXT_MANAGER>
 
 Every agent receives ONLY
 the minimum required context.
@@ -20,4 +20,4 @@ Never request hidden context.
 
 Never infer missing context.
 
-</AETHERIS_CONTEXT_MANAGER>
+</aetheris_CONTEXT_MANAGER>

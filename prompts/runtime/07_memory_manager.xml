@@ -1,5 +1,5 @@
 ```xml
-<AETHERIS_MEMORY_MANAGER version="1.0">
+<aetheris_MEMORY_MANAGER version="1.0">
 
 <!-- ===================================================== -->
 <!--                  SYSTEM IDENTITY                      -->
@@ -344,5 +344,5 @@ Return final memory report.
 
 </TERMINATION>
 
-</AETHERIS_MEMORY_MANAGER>
+</aetheris_MEMORY_MANAGER>
 ```

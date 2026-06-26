@@ -1,5 +1,5 @@
 """
-Aetheris — Adaptive Multi-Model Reasoning Orchestrator
+aetheris — Adaptive Multi-Model Reasoning Orchestrator
 Main entry point: async CLI REPL.
 
 Initialises the infrastructure layer (ProviderPool, ProviderStrategy,
@@ -21,7 +21,12 @@ from typing import Any
 from api_gateway import ProviderPool, AsyncAPIGateway, AllModelsExhaustedError, ProviderStrategy
 from api_gateway.rate_limiter import extract_provider_key
 from core.config import get_settings
+from core.passport import ExecutionPassport
 from orchestrator import run_micro_mode
+from orchestrator.aetheris_orchestrator import (
+    initialize_aetheris_components,
+    create_request_passport,
+)
 from telemetry.observer import observer
 
 # ── Logging ──────────────────────────────────────────────────────────────
@@ -87,7 +92,7 @@ def _pretty_print_result(result: dict[str, Any]) -> None:
     colour = status_colours.get(status, _DIM)
     print(
         f"\n{_BOLD}{'═' * 72}{_RESET}\n"
-        f"  {_BOLD}Aetheris Micro-Mode Result{_RESET}   "
+        f"  {_BOLD}aetheris Micro-Mode Result{_RESET}   "
         f"[{colour}{status.upper()}{_RESET}]\n"
         f"{_BOLD}{'═' * 72}{_RESET}"
     )
@@ -100,7 +105,7 @@ def _pretty_print_result(result: dict[str, Any]) -> None:
 
     # ── Scores ───────────────────────────────────────────────────────
     score = result.get("validation_score", 0.0)
-    diversity = result.get("diversity_metric", 0.0)
+    diversity = result.get("confidence_delta", 0.0)
     print(
         f"\n  {_MAGENTA}{_BOLD}▸ Validation Score:{_RESET}  {score:.2f}/10"
         f"     {_MAGENTA}{_BOLD}Diversity:{_RESET}  {diversity:.2f}"
@@ -145,6 +150,16 @@ def _pretty_print_result(result: dict[str, Any]) -> None:
 
     print(f"\n{_BOLD}{'─' * 72}{_RESET}\n")
 
+    # ── Passport metadata (if available) ──────────────────────────────
+    passport_data = result.get("_passport")
+    if passport_data:
+        sec = passport_data.get("security_metadata", {})
+        print(
+            f"  {_DIM}request_id: {passport_data.get('request_id', '—')}{_RESET}\n"
+            f"  {_DIM}injection_attempts: {sec.get('injection_attempts', 0)}"
+            f"  validation_failures: {len(sec.get('validation_failures', []))}{_RESET}\n"
+        )
+
 
 def _trim(text: str, max_len: int) -> str:
     """Truncate *text* with an ellipsis if it exceeds *max_len*."""
@@ -165,24 +180,28 @@ async def main() -> None:
         level=getattr(logging, settings.LOG_LEVEL, logging.INFO),
         format=settings.LOG_FORMAT,
     )
-    logger.info("Aetheris starting up …")
+    logger.info("aetheris starting up …")
 
     # ── Infrastructure ───────────────────────────────────────────────
     strategy = ProviderStrategy(mode="HYBRID")
     pool = _bootstrap_provider_pool(strategy)
     gateway = AsyncAPIGateway()
 
+    # ── AETHERIS Components ────────────────────────────────────────────
+    aetheris = initialize_aetheris_components()
+
     logger.info(
-        "Infrastructure ready — strategy=%s, providers=%d, gateway=OK.",
+        "Infrastructure ready — strategy=%s, providers=%d, gateway=OK, aetheris=%s.",
         strategy.mode.value,
         len(pool.get_all_statuses()),
+        ", ".join(sorted(aetheris.keys())),
     )
 
     # ── CLI banner ───────────────────────────────────────────────────
     print(
         f"\n{_BOLD}{_CYAN}"
         "    ╔═══════════════════════════════════════════════════╗\n"
-        "    ║  Aetheris — Adaptive Multi-Model Reasoning Orchestrator  ║\n"
+        "    ║  aetheris — Adaptive Multi-Model Reasoning Orchestrator  ║\n"
         "    ║  Mode: HYBRID  │  Pipeline: Micro-Mode           ║\n"
         "    ╚═══════════════════════════════════════════════════╝"
         f"{_RESET}\n"
@@ -213,15 +232,36 @@ async def main() -> None:
 
             # ── Pipeline execution ───────────────────────────────────────
             try:
+                # Create an ExecutionPassport for this request
+                passport = create_request_passport()
+
+                # Generate session_id for conversation tracking
+                import uuid
+                session_id = str(uuid.uuid4())
+
                 result = await asyncio.wait_for(
                     run_micro_mode(
                         user_query=user_input,
                         gateway=gateway,
                         strategy=strategy,
                         pool=pool,
+                        passport=passport,
+                        decision_engine=aetheris["decision_engine"],
+                        reasoning_graph=aetheris["reasoning_graph"],
+                        claim_manager=aetheris["claim_manager"],
+                        streaming_manager=aetheris["streaming_manager"],
+                        conversation_director=aetheris["conversation_director"],
+                        session_id=session_id,
                     ),
                     timeout=_PIPELINE_TIMEOUT_SEC,
                 )
+
+                # Log final passport state (3 retries with 1s delay)
+                passport.log_final_state()
+
+                # Attach passport metadata to result for display
+                result["_passport"] = passport.to_dict()
+
                 _pretty_print_result(result)
 
             except asyncio.TimeoutError:
@@ -292,7 +332,7 @@ def _print_pool_status(pool: ProviderPool) -> None:
 # ── Synchronous entry point ─────────────────────────────────────────────
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Aetheris — Adaptive Multi-Model Reasoning Orchestrator")
+    parser = argparse.ArgumentParser(description="aetheris — Adaptive Multi-Model Reasoning Orchestrator")
     parser.add_argument("--web", action="store_true", help="Launch web UI instead of terminal REPL")
     parser.add_argument("--port", type=int, default=8000, help="Port for web server (default: 8000)")
     parser.add_argument("--host", default="127.0.0.1", help="Host for web server (default: 127.0.0.1)")
@@ -303,7 +343,7 @@ if __name__ == "__main__":
         from server import app
         print(
             f"\n{_BOLD}{_CYAN}"
-            "    Aetheris Web UI starting...\n"
+            "    aetheris Web UI starting...\n"
             f"    Open  http://{args.host}:{args.port}  in your browser."
             f"{_RESET}\n"
         )

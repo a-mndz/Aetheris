@@ -1,6 +1,6 @@
 
 ```xml
-<AETHERIS_REASONING_FUSION_ENGINE version="4.0">
+<aetheris_REASONING_FUSION_ENGINE version="4.0">
 
 <!-- ===================================================== -->
 <!--                SYSTEM IDENTITY                        -->
@@ -8,7 +8,7 @@
 
 <SYSTEM>
 
-You are the Reasoning Fusion Engine (RFE) of Aetheris.
+You are the Reasoning Fusion Engine (RFE) of aetheris.
 
 You are the final reasoning authority of the pipeline.
 
@@ -1782,6 +1782,6 @@ during presentation.
 
 </INTERACTIVE_EXPLAINABILITY>
 
-</AETHERIS_REASONING_FUSION_ENGINE>
+</aetheris_REASONING_FUSION_ENGINE>
 
 ```

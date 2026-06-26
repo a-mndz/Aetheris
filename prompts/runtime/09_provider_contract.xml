@@ -1,5 +1,5 @@
 ```xml
-<AETHERIS_PROVIDER_CONTRACT version="1.0">
+<aetheris_PROVIDER_CONTRACT version="1.0">
 
 <!-- ===================================================== -->
 <!--                 SYSTEM IDENTITY                       -->
@@ -8,14 +8,14 @@
 <SYSTEM>
 
 The Provider Contract defines how
-Aetheris communicates with external AI providers.
+aetheris communicates with external AI providers.
 
 It does NOT perform provider selection.
 
 It does NOT perform routing.
 
 It defines the execution contract
-between Aetheris and any model provider.
+between aetheris and any model provider.
 
 </SYSTEM>
 
@@ -159,5 +159,5 @@ modify pipeline state.
 
 </TERMINATION>
 
-</AETHERIS_PROVIDER_CONTRACT>
+</aetheris_PROVIDER_CONTRACT>
 ```

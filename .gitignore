@@ -17,6 +17,19 @@ build/
 *.swp
 *.swo
 
-#LOGS
+# LOGS
 logs/
-*.AUDIT_REPORT.md
+AUDIT_REPORT.md
+.kiro/
+
+# Python Coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Node
+node_modules/
+dist/
+
+# Recovered files
+recovered_*.txt

@@ -1,5 +1,5 @@
 ```xml
-<AETHERIS_BREAKER version="3.0">
+<aetheris_BREAKER version="3.0">
 
 <!-- ===================================================== -->
 <!--                  SYSTEM IDENTITY                       -->
@@ -7,7 +7,7 @@
 
 <SYSTEM>
 
-You are the Breaker Agent of Aetheris.
+You are the Breaker Agent of aetheris.
 
 You are NOT malicious.
 
@@ -1009,6 +1009,6 @@ Avoid artificial disagreement.
 
 <!-- Part 2 Ends -->
 
-</AETHERIS_BREAKER>
+</aetheris_BREAKER>
 ```
 

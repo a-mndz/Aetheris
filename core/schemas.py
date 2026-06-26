@@ -1,5 +1,5 @@
 """
-Aetheris — Adaptive Multi-Model Reasoning Orchestrator
+aetheris — Adaptive Multi-Model Reasoning Orchestrator
 Core data contracts (Pydantic V2 strict models).
 
 These schemas define the structured I/O boundaries between agents,
@@ -8,9 +8,11 @@ the signal-evaluation layer, and the final synthesis output.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from typing import Any
+from datetime import datetime
+from typing import Any, Literal
 import json
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 # ── Signal State ─────────────────────────────────────────────────────────
@@ -162,10 +164,10 @@ class AgentOutput(BaseModel):
             return 0.5
 
 
-# ── Aetheris Final Output ──────────────────────────────────────────────────
+# ── aetheris Final Output ──────────────────────────────────────────────────
 
 
-class AetherisOutput(BaseModel):
+class aetherisOutput(BaseModel):
     """
     The final synthesized validation output returned by validation arbitrage.
     """
@@ -231,3 +233,62 @@ class AetherisOutput(BaseModel):
         ...,
         description="Scoring indicating overall logical consistency.",
     )
+
+
+# ── AETHERIS Shared Schemas ─────────────────────────────────────────────────────
+
+
+class SessionMetadata(BaseModel):
+    """Conversation session metadata shared with API and telemetry layers."""
+
+    model_config = ConfigDict(strict=True)
+
+    session_id: str = Field(..., min_length=1)
+    user_id: str | None = None
+    created_at: datetime
+    last_activity: datetime
+    turn_count: int = Field(..., ge=0)
+    total_tokens: int = Field(..., ge=0)
+    state: Literal["active", "waiting", "completed", "failed"]
+
+
+class PipelineResult(BaseModel):
+    """Structured result produced by a complete AETHERIS pipeline execution."""
+
+    model_config = ConfigDict(strict=True)
+
+    request_id: str = Field(..., min_length=1)
+    session_id: str | None = None
+    status: Literal["success", "error", "aborted"]
+    final_answer: str
+    validation_score: float = Field(..., ge=0.0, le=10.0)
+    confidence_delta: float = Field(..., ge=0.0, le=1.0)
+    agent_outputs: dict[str, Any] = Field(default_factory=dict)
+    execution_time_ms: float = Field(..., ge=0.0)
+    security_metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProviderHealthStatus(BaseModel):
+    """Current provider health snapshot used for routing and monitoring."""
+
+    model_config = ConfigDict(strict=True)
+
+    provider_name: str = Field(..., min_length=1)
+    status: Literal["healthy", "degraded", "dead"]
+    success_rate: float = Field(..., ge=0.0, le=1.0)
+    avg_latency_ms: float = Field(..., ge=0.0)
+    error_count_24h: int = Field(..., ge=0)
+    last_check: datetime
+
+
+class CheckpointData(BaseModel):
+    """Minimal state required to resume a pipeline from a checkpoint."""
+
+    model_config = ConfigDict(strict=True)
+
+    checkpoint_id: str = Field(..., min_length=1)
+    request_id: str = Field(..., min_length=1)
+    stage: str = Field(..., min_length=1)
+    timestamp: datetime
+    agent_outputs: dict[str, Any] = Field(default_factory=dict)
+    partial_results: dict[str, Any] = Field(default_factory=dict)

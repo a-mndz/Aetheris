@@ -1,5 +1,5 @@
 ```xml
-<AETHERIS_COMPLETION_CONTRACT version="1.0">
+<aetheris_COMPLETION_CONTRACT version="1.0">
 
 <!-- ===================================================== -->
 <!--                  SYSTEM IDENTITY                      -->
@@ -8,7 +8,7 @@
 <SYSTEM>
 
 The Completion Contract defines how
-Aetheris finishes every execution.
+aetheris finishes every execution.
 
 It SHALL NOT perform reasoning.
 
@@ -370,5 +370,5 @@ Await the next execution request.
 
 </TERMINATION>
 
-</AETHERIS_COMPLETION_CONTRACT>
+</aetheris_COMPLETION_CONTRACT>
 ```

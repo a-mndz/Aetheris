@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion';
 import { Brain, Palette, Scale, GitBranch, ArrowRight, Sparkles } from 'lucide-react';
 import TriadMark from './TriadMark';
+import { useSettingsStore } from '../store/useSettingsStore';
 
 const SUGGESTIONS = [
   {
@@ -29,12 +30,14 @@ const PIPELINE_STEPS = [
 ];
 
 export default function EmptyState({ onSuggestion }) {
+  const animationsEnabled = useSettingsStore((state) => state.animationsEnabled);
+  
   return (
     <div className="flex h-full flex-col items-center justify-center px-6 text-center">
       {/* Animated Logo */}
       <motion.div
-        initial={{ opacity: 0, scale: 0.8 }}
-        animate={{ opacity: 1, scale: 1 }}
+        initial={animationsEnabled ? { opacity: 0, scale: 0.8 } : false}
+        animate={animationsEnabled ? { opacity: 1, scale: 1 } : false}
         transition={{ duration: 0.5, ease: 'easeOut' }}
         className="mb-6 flex h-20 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-500/10 to-violet-500/10 ring-1 ring-white/10 animate-float shadow-glow"
       >
@@ -42,8 +45,8 @@ export default function EmptyState({ onSuggestion }) {
       </motion.div>
 
       <motion.h2
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
+        initial={animationsEnabled ? { opacity: 0, y: 8 } : false}
+        animate={animationsEnabled ? { opacity: 1, y: 0 } : false}
         transition={{ delay: 0.1 }}
         className="text-xl font-bold text-slate-100"
       >
@@ -51,8 +54,8 @@ export default function EmptyState({ onSuggestion }) {
       </motion.h2>
 
       <motion.p
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
+        initial={animationsEnabled ? { opacity: 0, y: 8 } : false}
+        animate={animationsEnabled ? { opacity: 1, y: 0 } : false}
         transition={{ delay: 0.2 }}
         className="mt-2 max-w-md text-sm text-slate-400 leading-relaxed"
       >
@@ -62,8 +65,8 @@ export default function EmptyState({ onSuggestion }) {
 
       {/* Pipeline Visualization */}
       <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
+        initial={animationsEnabled ? { opacity: 0, y: 10 } : false}
+        animate={animationsEnabled ? { opacity: 1, y: 0 } : false}
         transition={{ delay: 0.3 }}
         className="mt-6 flex items-center gap-2 rounded-xl glass-panel px-4 py-3"
       >
@@ -87,8 +90,8 @@ export default function EmptyState({ onSuggestion }) {
 
       {/* Suggestion Cards */}
       <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
+        initial={animationsEnabled ? { opacity: 0, y: 10 } : false}
+        animate={animationsEnabled ? { opacity: 1, y: 0 } : false}
         transition={{ delay: 0.4 }}
         className="mt-8 grid w-full max-w-lg gap-2 sm:grid-cols-2"
       >

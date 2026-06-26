@@ -9,5 +9,6 @@ sqlalchemy>=2.0.0
 asyncpg>=0.29.0
 passlib[bcrypt]>=1.7.4
 python-jose[cryptography]>=3.3.0
+tiktoken>=0.5.0
 
 

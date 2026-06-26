@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { ChevronDown } from 'lucide-react';
+import { cardExpandVariants, timelineEntryVariants } from '../utils/animations';
+import { useSettingsStore } from '../store/useSettingsStore';
 
 /**
  * AgentThinkingCard — displays a single agent's reasoning output
@@ -23,6 +25,7 @@ export default function AgentThinkingCard({
   defaultExpanded = false,
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
+  const animationsEnabled = useSettingsStore((state) => state.animationsEnabled);
 
   if (!agent) {
     return (
@@ -60,8 +63,8 @@ export default function AgentThinkingCard({
       {/* Expandable Content */}
       <motion.div
         initial={false}
-        animate={{ height: expanded ? 'auto' : 0, opacity: expanded ? 1 : 0 }}
-        transition={{ duration: 0.25, ease: 'easeInOut' }}
+        animate={expanded ? 'expanded' : 'collapsed'}
+        variants={animationsEnabled ? cardExpandVariants : undefined}
         className="overflow-hidden"
       >
         <div className="px-4 pb-4">
@@ -73,15 +76,18 @@ export default function AgentThinkingCard({
               </p>
               <div className="space-y-0.5">
                 {agent.reasoning_steps.map((step, i) => (
-                  <div
+                  <motion.div
                     key={i}
                     className={`timeline-step ${dotClass}`}
-                    style={{ animationDelay: `${i * 80}ms` }}
+                    initial={animationsEnabled ? 'hidden' : false}
+                    animate={animationsEnabled ? 'visible' : false}
+                    variants={timelineEntryVariants}
+                    custom={i}
                   >
                     <p className="text-[13px] text-slate-300 leading-relaxed py-1">
                       {step}
                     </p>
-                  </div>
+                  </motion.div>
                 ))}
               </div>
             </div>

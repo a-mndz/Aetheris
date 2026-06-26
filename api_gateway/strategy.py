@@ -1,5 +1,5 @@
 """
-Aetheris — Adaptive Multi-Model Reasoning Orchestrator
+aetheris — Adaptive Multi-Model Reasoning Orchestrator
 Provider strategy: mode-aware model selection with per-role fallback chains.
 
 This module maps each system *role* (generation, breaker, judge) to a

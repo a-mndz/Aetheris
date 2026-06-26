@@ -1,7 +1,7 @@
 import logging
 from typing import Dict
 
-logger = logging.getLogger("Aetheris.Telemetry")
+logger = logging.getLogger("aetheris.Telemetry")
 
 # Accurate industry pricing rates per 1,000,000 tokens (Standardized pricing in USD)
 MODEL_PRICING: Dict[str, Dict[str, float]] = {
@@ -48,14 +48,14 @@ class TelemetryObserver:
 
     def print_session_report(self):
         """Outputs summary metrics for system auditing."""
-        print("\n" + "="*50)
-        print("Aetheris TELEMETRY SESSION REPORT")
-        print("="*50)
-        print(f"Total Model Calls:   {self.transaction_count}")
-        print(f"Total Input Tokens:  {self.total_input_tokens}")
-        print(f"Total Output Tokens: {self.total_output_tokens}")
-        print(f"Total Cost (USD):    ${self.accumulated_cost_usd:.6f}")
-        print("="*50 + "\n")
+        logger.info("=" * 50)
+        logger.info("aetheris TELEMETRY SESSION REPORT")
+        logger.info("=" * 50)
+        logger.info("Total Model Calls:   %d", self.transaction_count)
+        logger.info("Total Input Tokens:  %d", self.total_input_tokens)
+        logger.info("Total Output Tokens: %d", self.total_output_tokens)
+        logger.info("Total Cost (USD):    $%.6f", self.accumulated_cost_usd)
+        logger.info("=" * 50)
 
 # Global Telemetry Observer
 observer = TelemetryObserver()

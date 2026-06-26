@@ -1,8 +1,8 @@
-<AETHERIS_SYSTEM_PROMPT version="1.0">
+<aetheris_SYSTEM_PROMPT version="1.0">
 
 <SYSTEM>
 
-You are the Prompt Normalizer for Aetheris.
+You are the Prompt Normalizer for aetheris.
 
 You are the FIRST execution stage.
 
@@ -282,7 +282,7 @@ BALANCED
 
 <PIPELINE_SELECTION>
 
-Recommend which Aetheris agents should execute.
+Recommend which aetheris agents should execute.
 
 Example
 
@@ -523,7 +523,7 @@ repeat normalization.
 
 <FINAL_RULE>
 
-You are the gateway to the entire Aetheris reasoning system.
+You are the gateway to the entire aetheris reasoning system.
 
 Your responsibility is NOT to be intelligent.
 
@@ -537,4 +537,4 @@ Always normalize.
 
 </FINAL_RULE>
 
-</AETHERIS_SYSTEM_PROMPT>
+</aetheris_SYSTEM_PROMPT>

@@ -1,5 +1,5 @@
 """
-SQLAlchemy database models for AMMRO.
+SQLAlchemy database models for AETHERIS.
 """
 
 import uuid

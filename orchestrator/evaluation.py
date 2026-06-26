@@ -1,5 +1,5 @@
 """
-Aetheris — Adaptive Multi-Model Reasoning Orchestrator
+aetheris — Adaptive Multi-Model Reasoning Orchestrator
 Validation arbitration & synthesis judge.
 
 Invokes a dedicated judge model to score logical consistency between
@@ -12,13 +12,13 @@ import json
 import logging
 from typing import Optional
 
-from core.schemas import AetherisOutput
+from core.schemas import aetherisOutput
 from agents.parser import parse_and_repair
-from agents.prompt_manager import assemble_agent_prompt
+from agents.prompt_utils import assemble_synthesizer_prompt
 from api_gateway.strategy import ProviderStrategy
 from api_gateway.rate_limiter import AsyncAPIGateway, ProviderPool
 
-logger = logging.getLogger("Aetheris.Orchestrator.Evaluation")
+logger = logging.getLogger("aetheris.Orchestrator.Evaluation")
 
 
 async def arbitrate_and_synthesize(
@@ -30,7 +30,7 @@ async def arbitrate_and_synthesize(
     pool: Optional[ProviderPool] = None,
     lessons: str = "",
     history: list[dict[str, str]] | None = None,
-) -> AetherisOutput | dict:
+) -> aetherisOutput | dict:
     """
     Invokes the synthesizer judge to score logical consistency
     and formulate the authoritative consensus response.
@@ -89,7 +89,7 @@ INSTRUCTIONS:
 3. Provide validation_score from 0.0 to 10.0 indicating overall logical consistency.
 4. State structural disagreements clearly in 'disagreement_notes'.
 
-Output strictly in raw JSON following the AetherisOutput schema layout:
+Output strictly in raw JSON following the aetherisOutput schema layout:
 {{
   "final_answer": "<your_synthesized_response>",
   "overall_confidence": "High/Medium/Low",
@@ -100,14 +100,7 @@ Output strictly in raw JSON following the AetherisOutput schema layout:
 """
 
     logger.info("Calling Synthesizer validation judge...")
-    system_prompt = assemble_agent_prompt(
-        role="Reasoning Fusion Engine",
-        pipeline_stage="Synthesis",
-        objective="Consensus and Synthesis Arbitration",
-        iteration=1,
-        execution_mode=strategy.mode.value,
-        system_prompt_filename="09_synthesizer.xml"
-    )
+    system_prompt = assemble_synthesizer_prompt(strategy.mode.value)
 
     raw_judge_output = await gateway.execute_with_fallback(
         prompt=evaluation_prompt,
@@ -116,6 +109,7 @@ Output strictly in raw JSON following the AetherisOutput schema layout:
         strategy=strategy,
         pool=pool,
         history=history,
+        user_controlled=False,
     )
 
-    return parse_and_repair(raw_judge_output, AetherisOutput)
+    return parse_and_repair(raw_judge_output, aetherisOutput)

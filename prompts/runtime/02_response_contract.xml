@@ -1,4 +1,4 @@
-<AETHERIS_RESPONSE_CONTRACT>
+<aetheris_RESPONSE_CONTRACT>
 
 Every execution MUST return
 
@@ -24,4 +24,4 @@ Always return structured output.
 
 Never omit required fields.
 
-</AETHERIS_RESPONSE_CONTRACT>
+</aetheris_RESPONSE_CONTRACT>

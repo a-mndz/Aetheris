@@ -1,4 +1,4 @@
-# Aetheris — Adaptive Multi-Model Reasoning Orchestrator
+# aetheris — Adaptive Multi-Model Reasoning Orchestrator
 
 > **[ACTIVE DEVELOPMENT]** A resilient multi-agent reasoning engine that orchestrates LLM agents through a validation-arbitration pipeline, utilizing dynamic runtime prompt layering, and automatically falling back across providers when models fail.
 
@@ -8,11 +8,11 @@
 
 ---
 
-## What is Aetheris?
+## What is aetheris?
 
-Aetheris is an advanced **multi-agent reasoning orchestrator** designed to produce high-quality, validated responses by running multiple AI agents in parallel and utilizing a synthesis judge to arbitrate the final result.
+aetheris is an advanced **multi-agent reasoning orchestrator** designed to produce high-quality, validated responses by running multiple AI agents in parallel and utilizing a synthesis judge to arbitrate the final result.
 
-Instead of relying on a single raw model call, Aetheris executes a robust **four-stage pipeline**:
+Instead of relying on a single raw model call, aetheris executes a robust **four-stage pipeline**:
 
 1. **Breaker Gate** — A lightweight pre-filter checks if the system has sufficient context to answer. If not, it aborts immediately.
 2. **Logician Agent** — Generates a strictly deductive, logically valid answer.
@@ -65,7 +65,7 @@ The entire pipeline is **async-native**, runs with **bounded concurrency**, and 
 ```
 
 ### 1. Dynamic Runtime Prompt Layering
-To enforce system instructions and role boundaries, Aetheris dynamically layers prompts before sending payloads to the LLM:
+To enforce system instructions and role boundaries, aetheris dynamically layers prompts before sending payloads to the LLM:
 
 * **Layer 1: `<ROLE>` Block** — Dynamically injected metadata defining the current role, active pipeline stage, objective, iteration count, and execution mode.
 * **Layer 2: Runtime Prompts (`prompts/runtime/`)** — Global runtime constraints loaded and appended sequentially (`00_agent_runtime.xml`, `01_prompt_loader.xml`, `02_response_contract.xml`, `03_context_manager.xml`, etc.).
@@ -77,6 +77,23 @@ All prompt templates are formatted in clean, single-root XML structures for stru
 * **Priority Routing:** If the primary model for a stage fails or times out, the system automatically escalates to a fallback provider chain.
 * **Circuit Breaker:** Tracks failures per provider. If a provider fails 3 consecutive times, it enters cooldown (`DEAD`) and is bypassed for 60 seconds.
 * **Simulation Mode:** Automatically matches environment variables. If no API keys are present, the system runs with deterministic mock responses to enable cost-free development.
+### 3. AETHERIS Architecture Integration
+aetheris now incorporates the Adaptive Multi-Model Reasoning Orchestrator (AETHERIS) architecture, adding:
+* **Conversation Management**: Multi-turn dialogue state with automatic token limit truncation.
+* **Provider Registry**: Advanced circuit breaking, exponential backoff, and health monitoring.
+* **Resource Limits**: Configurable rate limits per provider and per user, global concurrency controls.
+* **Checkpoints**: State saving and restoration for long-running pipelines.
+* **Streaming & Observability**: Real-time SSE streaming for all agent activities and telemetry.
+* **Security Validation**: Robust prompt injection detection, input escaping, and secret scrubbing.
+
+### 4. New API Endpoints & Request/Response Fields
+* **New Endpoints**:
+  * `/sessions`, `/sessions/{session_id}`, `/sessions/{session_id}/history` - Manage conversation sessions.
+  * `/checkpoints/{request_id}`, `/checkpoints/{checkpoint_id}/restore` - Pipeline checkpoints.
+  * `/providers/health`, `/providers/{provider_name}/recovery` - Monitor and recover provider health.
+  * `/telemetry` - Aggregated metrics for decision engine, resources, and security.
+* **New Request Parameters**: `session_id`, `user_id` for conversation tracking and rate limiting.
+* **New Response Fields**: `request_id`, `security_metadata`, `unverified_claims`, `conversation_metadata`.
 
 ---
 
@@ -123,19 +140,19 @@ pip install -r requirements.txt
 Create a `.env` file in the project root:
 ```bash
 # OpenRouter (recommended — gives access to 100+ models)
-AETHERIS_OPENROUTER_API_KEY=sk-or-v1-xxxxxxxx
+aetheris_OPENROUTER_API_KEY=sk-or-v1-xxxxxxxx
 
 # Groq (fast inference)
-AETHERIS_GROQ_API_KEY=gsk_xxxxxxxx
+aetheris_GROQ_API_KEY=gsk_xxxxxxxx
 
 # NVIDIA NIM
-AETHERIS_NVIDIA_NIM_API_KEY=nvapi-xxxxxxxx
+aetheris_NVIDIA_NIM_API_KEY=nvapi-xxxxxxxx
 
 # GitHub Models
-AETHERIS_GITHUB_TOKEN=ghp_xxxxxxxx
+aetheris_GITHUB_TOKEN=ghp_xxxxxxxx
 
 # Logging
-AETHERIS_LOG_LEVEL=INFO
+aetheris_LOG_LEVEL=INFO
 ```
 *(Note: If you leave keys blank, the system defaults to Simulation Mode).*
 
@@ -168,7 +185,7 @@ aetheris/
 │
 ├── core/
 │   ├── config.py              # Pydantic-Settings configuration loader
-│   └── schemas.py             # Pydantic V2 data contracts (AgentOutput, AetherisOutput)
+│   └── schemas.py             # Pydantic V2 data contracts (AgentOutput, aetherisOutput)
 │
 ├── api_gateway/
 │   ├── client.py              # HTTPX AsyncClient + simulation mode

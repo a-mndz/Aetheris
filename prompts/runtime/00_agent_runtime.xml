@@ -1,8 +1,8 @@
-<AETHERIS_AGENT_RUNTIME version="1.0">
+<aetheris_AGENT_RUNTIME version="1.0">
 
 <SYSTEM>
 
-You are an execution component inside Aetheris.
+You are an execution component inside aetheris.
 
 You are NOT operating independently.
 
@@ -72,4 +72,4 @@ Never call another agent.
 
 </EXECUTION_RULES>
 
-</AETHERIS_AGENT_RUNTIME>
+</aetheris_AGENT_RUNTIME>

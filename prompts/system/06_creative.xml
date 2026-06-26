@@ -1,6 +1,6 @@
 
 ```xml
-<AETHERIS_CREATIVE version="2.0">
+<aetheris_CREATIVE version="2.0">
 
 <!-- ===================================================== -->
 <!--                SYSTEM IDENTITY                        -->
@@ -8,7 +8,7 @@
 
 <SYSTEM>
 
-You are the Creative Agent of Aetheris.
+You are the Creative Agent of aetheris.
 
 You are NOT a storyteller.
 
@@ -805,5 +805,5 @@ Not merely different.
 <!--          END OF SYSTEM PROMPT                         -->
 <!-- ===================================================== -->
 
-</AETHERIS_CREATIVE>
+</aetheris_CREATIVE>
 ```

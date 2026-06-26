@@ -1,5 +1,5 @@
 """
-Aetheris — Adaptive Multi-Model Reasoning Orchestrator
+aetheris — Adaptive Multi-Model Reasoning Orchestrator
 Configuration module using pydantic-settings for environment variable loading
 with optional API credentials, hardware constraints, and logging validation.
 """
@@ -9,16 +9,16 @@ from pydantic import Field, field_validator
 from typing import Any
 
 
-class AetherisConfig(BaseSettings):
+class aetherisConfig(BaseSettings):
     """
-    Central configuration for the Aetheris multi-agent orchestration system.
+    Central configuration for the aetheris multi-agent orchestration system.
 
     All values are loaded from environment variables (or a `.env` file).
-    Prefix: AETHERIS_  (e.g. AETHERIS_OPENROUTER_API_KEY)
+    Prefix: aetheris_  (e.g. aetheris_OPENROUTER_API_KEY)
     """
 
     model_config = SettingsConfigDict(
-        env_prefix="AETHERIS_",
+        env_prefix="aetheris_",
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=True,
@@ -72,19 +72,19 @@ class AetherisConfig(BaseSettings):
 
     JWT_SECRET_KEY: str = Field(
         default="09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7",
-        validation_alias="AETHERIS_JWT_SECRET_KEY",
+        validation_alias="aetheris_JWT_SECRET_KEY",
         description="Secret key used for signing JWT tokens",
     )
 
     JWT_ALGORITHM: str = Field(
         default="HS256",
-        validation_alias="AETHERIS_JWT_ALGORITHM",
+        validation_alias="aetheris_JWT_ALGORITHM",
         description="Algorithm used for signing JWT tokens",
     )
 
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(
         default=60,
-        validation_alias="AETHERIS_JWT_ACCESS_TOKEN_EXPIRE_MINUTES",
+        validation_alias="aetheris_JWT_ACCESS_TOKEN_EXPIRE_MINUTES",
         description="Duration in minutes that access tokens are valid for",
     )
 
@@ -186,12 +186,12 @@ class AetherisConfig(BaseSettings):
 
 # ── Singleton accessor ───────────────────────────────────────────────────
 
-_settings: AetherisConfig | None = None
+_settings: aetherisConfig | None = None
 
 
-def get_settings() -> AetherisConfig:
-    """Return a cached, validated AetherisConfig instance (singleton)."""
+def get_settings() -> aetherisConfig:
+    """Return a cached, validated aetherisConfig instance (singleton)."""
     global _settings  # noqa: PLW0603
     if _settings is None:
-        _settings = AetherisConfig()  # type: ignore[call-arg]
+        _settings = aetherisConfig()  # type: ignore[call-arg]
     return _settings

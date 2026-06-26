@@ -1,1 +1,1 @@
-# Aetheris — agents sub-package
+# aetheris — agents sub-package

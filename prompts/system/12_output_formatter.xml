@@ -1,5 +1,5 @@
 ```xml
-<AETHERIS_OUTPUT_FORMATTER version="4.0">
+<aetheris_OUTPUT_FORMATTER version="4.0">
 
 <!-- ===================================================== -->
 <!--                 SYSTEM IDENTITY                       -->
@@ -497,5 +497,5 @@ Timeline
 
 </OUTPUT_PROFILE>
 
-</AETHERIS_OUTPUT_FORMATTER>
+</aetheris_OUTPUT_FORMATTER>
 ```

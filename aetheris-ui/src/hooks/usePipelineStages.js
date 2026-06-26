@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useRef, useState, useEffect } from 'react';
 import { streamQuery } from '../api/client';
 
 /**
@@ -28,6 +28,33 @@ function derivePipelineStage(agents) {
 }
 
 /**
+ * Calculate progress percentage (0-100) based on pipeline stage.
+ * Maps each stage to a percentage range according to the design spec:
+ * - Prompt Normalizer: 0-10%
+ * - Conversation Director: 10-20%
+ * - Breaker: 20-35%
+ * - Agents (Logician + Creative): 35-70%
+ * - Judge (Logic + Factual): 70-85%
+ * - Fusion: 85-95%
+ * - Response: 95-100%
+ */
+export function calculateProgress(stage) {
+  const progressMap = {
+    idle: 0,
+    prompt_normalizer: 5,
+    conversation_director: 15,
+    breaker: 27,
+    agents: 52,
+    judge: 77,
+    fusion: 90,
+    response: 97,
+    done: 100,
+    error: 0,
+  };
+  return progressMap[stage] ?? 0;
+}
+
+/**
  * usePipelineStages — drives the pipeline progress indicator using
  * real-time granular per-agent SSE events from the backend.
  *
@@ -35,8 +62,11 @@ function derivePipelineStage(agents) {
  *   stage       – coarse pipeline stage ('idle' | 'breaker' | 'agents' | 'judge' | 'done' | 'error')
  *   agentStates – per-agent state object { Breaker, Logician, Creative, Judge }
  *   partialData – partial results streamed mid-pipeline (agent outputs for ReasoningPanel compatibility)
+ *   progress    – overall progress percentage (0-100)
+ *   elapsedMs   – elapsed time in milliseconds since pipeline start
  *   run(query, history) – starts the streaming pipeline
  *   reset()     – resets everything to idle
+ *   abort()     – aborts the current pipeline execution
  */
 export function usePipelineStages() {
   const [stage, setStage] = useState('idle');
@@ -47,7 +77,23 @@ export function usePipelineStages() {
     Judge: createAgentState(),
   });
   const [partialData, setPartialData] = useState(null);
+  const [progress, setProgress] = useState(0);
+  const [startTime, setStartTime] = useState(null);
+  const [elapsedMs, setElapsedMs] = useState(0);
   const abortRef = useRef(null);
+
+  // Update elapsed time every 100ms when pipeline is running
+  useEffect(() => {
+    if (!startTime || stage === 'idle' || stage === 'done' || stage === 'error') {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      setElapsedMs(Date.now() - startTime);
+    }, 100);
+
+    return () => clearInterval(interval);
+  }, [startTime, stage]);
 
   const run = useCallback(async (query, history) => {
     // Abort any in-flight request
@@ -55,7 +101,7 @@ export function usePipelineStages() {
     const controller = new AbortController();
     abortRef.current = controller;
 
-    // Reset all agent states
+    // Reset all agent states and timing
     const freshAgents = {
       Breaker: createAgentState(),
       Logician: createAgentState(),
@@ -65,6 +111,9 @@ export function usePipelineStages() {
     setAgentStates(freshAgents);
     setStage('breaker');
     setPartialData(null);
+    setProgress(calculateProgress('breaker'));
+    setStartTime(Date.now());
+    setElapsedMs(0);
 
     // Mutable ref for building state inside the event callback
     const agentsRef = { ...freshAgents };
@@ -74,7 +123,9 @@ export function usePipelineStages() {
       agentsRef[agentName] = { ...agentsRef[agentName], ...patch };
       const nextAgents = { ...agentsRef };
       setAgentStates(nextAgents);
-      setStage(derivePipelineStage(nextAgents));
+      const derivedStage = derivePipelineStage(nextAgents);
+      setStage(derivedStage);
+      setProgress(calculateProgress(derivedStage));
     };
 
     const onEvent = (event) => {
@@ -147,6 +198,7 @@ export function usePipelineStages() {
             updateAgent(event.agent, { status: 'error' });
           }
           setStage('error');
+          setProgress(0);
           break;
         }
 
@@ -179,12 +231,14 @@ export function usePipelineStages() {
         return { data: null, latencyMs: 0, error: null, aborted: true };
       }
       setStage('done');
+      setProgress(100);
       return { data, latencyMs, error: null, aborted: false };
     } catch (error) {
       if (controller.signal.aborted) {
         return { data: null, latencyMs: 0, error: null, aborted: true };
       }
       setStage('error');
+      setProgress(0);
       return { data: null, latencyMs: 0, error, aborted: false };
     }
   }, []);
@@ -192,6 +246,9 @@ export function usePipelineStages() {
   const reset = useCallback(() => {
     setStage('idle');
     setPartialData(null);
+    setProgress(0);
+    setStartTime(null);
+    setElapsedMs(0);
     setAgentStates({
       Breaker: createAgentState(),
       Logician: createAgentState(),
@@ -200,5 +257,14 @@ export function usePipelineStages() {
     });
   }, []);
 
-  return { stage, agentStates, partialData, run, reset };
+  const abort = useCallback(() => {
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+    setStage('error');
+    setProgress(0);
+  }, []);
+
+  return { stage, agentStates, partialData, progress, elapsedMs, run, reset, abort };
 }

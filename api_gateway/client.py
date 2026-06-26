@@ -3,19 +3,24 @@ import logging
 from typing import Optional
 import httpx
 from core.config import get_settings
+from core.security import SecurityValidator
 from telemetry.observer import observer
 from pathlib import Path
 import json
 
-logger = logging.getLogger("Aetheris.Gateway.Client")
+logger = logging.getLogger("aetheris.Gateway.Client")
 
 class AsyncHTTPClient:
     """
     Manages raw HTTP requests and reuse of connection pools.
     Degrades to Simulation Mode automatically if API tokens are unpopulated.
     """
-    def __init__(self):
+    def __init__(
+        self,
+        security_validator: SecurityValidator | None = None,
+    ) -> None:
         self.client = httpx.AsyncClient(timeout=600.0)
+        self.security_validator = security_validator or SecurityValidator()
 
     async def post_request(self, model: str, prompt: str, system_prompt: Optional[str] = None, history: list[dict[str, str]] | None = None) -> str:
         """Dispatches an asynchronous post request to target providers."""
@@ -27,15 +32,15 @@ class AsyncHTTPClient:
         if self._is_simulated(provider):
             return await self._run_simulation(model, prompt, system_prompt, history)
 
+        # AsyncAPIGateway validates and JSON-escapes user-controlled prompts
+        # before they reach this network boundary.
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
         if history:
-            messages.extend(history)
-            
-        # Wrap the user query securely if there's a system prompt (avoids double-wrapping the Judge)
-        safe_prompt = f"<user_query>\n{prompt}\n</user_query>" if system_prompt else prompt
-        messages.append({"role": "user", "content": safe_prompt})
+            insert_at = 1 if system_prompt else 0
+            messages[insert_at:insert_at] = history
 
         # Instruction Reinforcement: Remind the LLM of its structural obligations
         if system_prompt:
@@ -105,11 +110,17 @@ class AsyncHTTPClient:
             with open(log_dir / "model_io.log", "a", encoding="utf-8") as f:
                 f.write(f"=== {actual_model} ===\n")
                 f.write("--- INPUT (MESSAGES) ---\n")
-                f.write(json.dumps(payload["messages"], indent=2) + "\n")
+                logged_messages = self.security_validator.scrub_secrets(
+                    json.dumps(payload["messages"], indent=2)
+                )
+                f.write(logged_messages + "\n")
                 f.write("--- OUTPUT ---\n")
-                f.write(output_content + "\n\n")
+                f.write(self.security_validator.scrub_secrets(output_content) + "\n\n")
         except Exception as e:
-            logger.error(f"Failed to write IO log: {e}")
+            logger.error(
+                "Failed to write IO log: %s",
+                self.security_validator.scrub_secrets(str(e)),
+            )
 
         return output_content
 

@@ -1,8 +1,8 @@
-<AETHERIS_CONVERSATION_DIRECTOR version="1.0">
+<aetheris_CONVERSATION_DIRECTOR version="1.0">
 
 <SYSTEM>
 
-You are the Conversation Director for Aetheris.
+You are the Conversation Director for aetheris.
 
 You are NOT an answering agent.
 
@@ -424,4 +424,4 @@ End discussions when additional debate no longer improves the outcome.
 
 </FINAL_RULE>
 
-</AETHERIS_CONVERSATION_DIRECTOR>
+</aetheris_CONVERSATION_DIRECTOR>

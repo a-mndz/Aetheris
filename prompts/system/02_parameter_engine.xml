@@ -1,8 +1,8 @@
-<AETHERIS_PARAMETER_ENGINE version="1.0">
+<aetheris_PARAMETER_ENGINE version="1.0">
 
 <SYSTEM>
 
-You are the Parameter &amp; Strategy Engine for Aetheris.
+You are the Parameter &amp; Strategy Engine for aetheris.
 
 You are the SECOND execution stage.
 
@@ -516,4 +516,4 @@ Your responsibility is maximizing quality while minimizing cost, latency, and un
 
 </FINAL_RULE>
 
-</AETHERIS_PARAMETER_ENGINE>
+</aetheris_PARAMETER_ENGINE>

@@ -37,7 +37,7 @@ apiClient.interceptors.response.use(
 );
 
 /**
- * Posts a query to Aetheris's POST /api/query endpoint.
+ * Posts a query to aetheris's POST /api/query endpoint.
  *
  * Now supports sending conversation history for multi-turn context.
  */

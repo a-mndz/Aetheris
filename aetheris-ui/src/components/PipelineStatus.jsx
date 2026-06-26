@@ -1,6 +1,8 @@
 import { motion } from 'framer-motion';
 import { GitBranch, Users, Scale, CheckCircle2, Clock, Radio } from 'lucide-react';
 import { useState, useEffect } from 'react';
+import { pulseVariants, progressBarVariants } from '../utils/animations';
+import { useSettingsStore } from '../store/useSettingsStore';
 
 const STAGES = [
   { key: 'breaker', label: 'Breaker', sublabel: 'Knowledge gate check', icon: GitBranch, agents: ['Breaker'] },
@@ -54,6 +56,7 @@ export default function PipelineStatus({ stage, agentStates }) {
   const isError = stage === 'error';
   const isDone = stage === 'done';
   const isActive = !isDone && !isError && currentIndex >= 0;
+  const animationsEnabled = useSettingsStore((state) => state.animationsEnabled);
 
   // Get dynamic message from current active stage's agents
   const activeStage = STAGES[currentIndex];
@@ -79,8 +82,9 @@ export default function PipelineStatus({ stage, agentStates }) {
                     ? 'ring-violet-400/40 text-violet-200 bg-violet-500/10 shadow-glow'
                     : 'ring-slate-600/30 text-slate-500 bg-white/[0.02]'
                 }`}
-                animate={active && !isError ? { scale: [1, 1.04, 1] } : { scale: 1 }}
-                transition={{ duration: 1.1, repeat: active ? Infinity : 0, ease: 'easeInOut' }}
+                initial={false}
+                animate={active && !isError && animationsEnabled ? 'active' : 'inactive'}
+                variants={pulseVariants}
               >
                 <Icon className="h-3.5 w-3.5" />
                 <span className="hidden sm:inline">{s.label}</span>
@@ -91,7 +95,10 @@ export default function PipelineStatus({ stage, agentStates }) {
                     className="absolute inset-y-0 left-0 bg-gradient-to-r from-cyan-400 to-violet-400"
                     initial={{ width: '0%' }}
                     animate={{ width: complete || active ? '100%' : '0%' }}
-                    transition={{ duration: 0.4 }}
+                    transition={{ 
+                      duration: animationsEnabled ? 0.4 : 0.01,
+                      ease: 'easeOut'
+                    }}
                   />
                 </div>
               )}

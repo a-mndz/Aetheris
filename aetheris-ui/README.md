@@ -1,4 +1,4 @@
-# Aetheris UI — Adaptive Multi-Model Reasoning Orchestrator
+# aetheris UI — Adaptive Multi-Model Reasoning Orchestrator
 
 A multi-agent reasoning interface for a FastAPI backend exposing `POST /api/query`.
 React 18 + Vite + Tailwind + Framer Motion + Zustand. No backend code is included —

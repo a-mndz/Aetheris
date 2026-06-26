@@ -1,5 +1,5 @@
 """
-Aetheris — Adaptive Multi-Model Reasoning Orchestrator
+aetheris — Adaptive Multi-Model Reasoning Orchestrator
 Pipeline: Micro-Mode execution path.
 """
 
@@ -11,9 +11,16 @@ from difflib import SequenceMatcher
 from typing import Any, AsyncGenerator, TypedDict
 
 from agents.parser import parse_and_repair
-from agents.prompt_manager import assemble_agent_prompt
+from agents.prompt_utils import (
+    assemble_generation_prompts,
+    init_conversation_context,
+    complete_conversation_session,
+    build_decision_dict,
+)
 from api_gateway.rate_limiter import AsyncAPIGateway, ProviderPool
 from api_gateway.strategy import ProviderStrategy
+from core.passport import ExecutionPassport
+from core.security import SecurityValidationError
 from core.schemas import AgentOutput
 from orchestrator.evaluation import arbitrate_and_synthesize
 from orchestrator.memory import epistemic_memory
@@ -23,14 +30,16 @@ logger = logging.getLogger(__name__)
 
 # ── Result Types ─────────────────────────────────────────────────────────
 
-class MicroModeResult(TypedDict):
+class MicroModeResult(TypedDict, total=False):
     status: str
     winning_answer: str
     validation_score: float
-    diversity_metric: float
+    confidence_delta: float
     judge_decision: dict[str, Any] | None
     logician_output: AgentOutput | dict[str, Any] | None
     creative_output: AgentOutput | dict[str, Any] | None
+    unverified_claims: list[dict[str, Any]]
+    conversation_metadata: dict[str, Any] | None
 
 
 # ── Knowledge-Absence Detection ─────────────────────────────────────────
@@ -66,37 +75,56 @@ async def run_micro_mode(
     strategy: ProviderStrategy,
     pool: ProviderPool,
     history: list[dict[str, str]] | None = None,
+    passport: ExecutionPassport | None = None,
+    decision_engine: Any | None = None,
+    reasoning_graph: Any | None = None,
+    claim_manager: Any | None = None,
+    streaming_manager: Any | None = None,
+    conversation_director: Any | None = None,
+    session_id: str | None = None,
 ) -> MicroModeResult:
     """
     Execute the **micro-mode** pipeline.
+
+    When *decision_engine* is provided the pipeline delegates gate and
+    generation logic to the :class:`DecisionEngine` instead of running
+    inline Breaker/parallel-generation code.  An optional *passport*
+    tracks the request lifecycle across all components.
     """
     logger.info("Micro-mode pipeline started for query: %.120s", user_query)
 
+    # ── Conversation context (Task 21.5) ────────────────────────────
+    history, conversation_metadata = init_conversation_context(
+        conversation_director, session_id, logger
+    )
+
+    # Track start time for passport timeout enforcement
+    import time as _time
+    _pipeline_start = _time.monotonic()
+
+    # ── Use DecisionEngine when available (Task 21.3) ────────────────
+    if decision_engine is not None:
+        return await _run_with_decision_engine(
+            user_query=user_query,
+            gateway=gateway,
+            strategy=strategy,
+            pool=pool,
+            history=history,
+            passport=passport,
+            decision_engine=decision_engine,
+            reasoning_graph=reasoning_graph,
+            claim_manager=claim_manager,
+            streaming_manager=streaming_manager,
+            conversation_director=conversation_director,
+            session_id=session_id,
+        )
+
+    # ── Legacy inline path (no decision engine) ──────────────────────
     # Assemble layered system prompts
-    breaker_sys = assemble_agent_prompt(
-        role="Breaker",
-        pipeline_stage="Pre-Filter",
-        objective="Knowledge Absence Detection",
-        iteration=1,
-        execution_mode=strategy.mode.value,
-        system_prompt_filename="04_breaker.xml"
-    )
-    logician_sys = assemble_agent_prompt(
-        role="Logician",
-        pipeline_stage="Generation",
-        objective="Logical Validation",
-        iteration=1,
-        execution_mode=strategy.mode.value,
-        system_prompt_filename="05_logician.xml"
-    )
-    creative_sys = assemble_agent_prompt(
-        role="Creative",
-        pipeline_stage="Generation",
-        objective="Creative Expansion",
-        iteration=1,
-        execution_mode=strategy.mode.value,
-        system_prompt_filename="06_creative.xml"
-    )
+    prompts = assemble_generation_prompts(strategy.mode.value)
+    breaker_sys = prompts["breaker"]
+    logician_sys = prompts["logician"]
+    creative_sys = prompts["creative"]
 
     try:
         breaker_raw = await gateway.execute_with_fallback(
@@ -107,13 +135,23 @@ async def run_micro_mode(
             pool=pool,
             history=history,
         )
+    except SecurityValidationError:
+        raise
     except Exception as exc:
         logger.error("Breaker gate call failed: %s: %s", type(exc).__name__, exc)
+        if passport is not None:
+            passport.record_error("breaker", str(exc))
+        if conversation_director is not None and session_id:
+            try:
+                from orchestrator.conversation import ConversationState
+                conversation_director.transition_state(session_id, ConversationState.FAILED)
+            except Exception:
+                pass
         return MicroModeResult(
             status="error",
             winning_answer=f"Pipeline error at Breaker gate: {exc}",
             validation_score=0.0,
-            diversity_metric=0.0,
+            confidence_delta=0.0,
             judge_decision=None,
             logician_output=None,
             creative_output=None,
@@ -128,17 +166,28 @@ async def run_micro_mode(
             else breaker_output.get("answer", "Unknown parse failure")
         )
         logger.warning("Breaker gate ABORTED pipeline: %s", reason)
+        if passport is not None:
+            passport.record_warning(f"Breaker gate aborted: {reason}")
+            passport.add_agent_output("breaker", breaker_output)
+        if conversation_director is not None and session_id:
+            try:
+                from orchestrator.conversation import ConversationState
+                conversation_director.transition_state(session_id, ConversationState.FAILED)
+            except Exception:
+                pass
         return MicroModeResult(
             status="aborted",
             winning_answer=reason,
             validation_score=0.0,
-            diversity_metric=0.0,
+            confidence_delta=0.0,
             judge_decision=None,
             logician_output=None,
             creative_output=None,
         )
 
     logger.info("Breaker gate passed — proceeding to generation.")
+    if passport is not None:
+        passport.add_agent_output("breaker", breaker_output)
 
     # ── Step 2: Concurrent Logician + Creative generation ────────────
     logger.info("Step 2/4 — Launching Logician and Creative agents concurrently.")
@@ -166,11 +215,19 @@ async def run_micro_mode(
     # Handle exceptions
     if isinstance(logician_result, BaseException):
         logger.error("Logician generation failed: %s", logician_result)
+        if passport is not None:
+            passport.record_error("logician", str(logician_result))
+        if conversation_director is not None and session_id:
+            try:
+                from orchestrator.conversation import ConversationState
+                conversation_director.transition_state(session_id, ConversationState.FAILED)
+            except Exception:
+                pass
         return MicroModeResult(
             status="error",
             winning_answer=f"Logician generation failed: {logician_result}",
             validation_score=0.0,
-            diversity_metric=0.0,
+            confidence_delta=0.0,
             judge_decision=None,
             logician_output=None,
             creative_output=None,
@@ -178,11 +235,19 @@ async def run_micro_mode(
 
     if isinstance(creative_result, BaseException):
         logger.error("Creative generation failed: %s", creative_result)
+        if passport is not None:
+            passport.record_error("creative", str(creative_result))
+        if conversation_director is not None and session_id:
+            try:
+                from orchestrator.conversation import ConversationState
+                conversation_director.transition_state(session_id, ConversationState.FAILED)
+            except Exception:
+                pass
         return MicroModeResult(
             status="error",
             winning_answer=f"Creative generation failed: {creative_result}",
             validation_score=0.0,
-            diversity_metric=0.0,
+            confidence_delta=0.0,
             judge_decision=None,
             logician_output=None,
             creative_output=None,
@@ -201,14 +266,25 @@ async def run_micro_mode(
     logician_agent = _ensure_agent_output(logician_output, "Logician")
     creative_agent = _ensure_agent_output(creative_output, "Creative")
 
+    # Track agent outputs in passport
+    if passport is not None:
+        passport.add_agent_output("logician", logician_output)
+        passport.add_agent_output("creative", creative_output)
+
     # Guard: if either agent produced an error sentinel, skip the judge.
     if logician_agent.answer.startswith("ERROR:") and creative_agent.answer.startswith("ERROR:"):
         logger.error("Both agent outputs are parse-failure sentinels — skipping judge.")
+        if conversation_director is not None and session_id:
+            try:
+                from orchestrator.conversation import ConversationState
+                conversation_director.transition_state(session_id, ConversationState.FAILED)
+            except Exception:
+                pass
         return MicroModeResult(
             status="error",
             winning_answer="Both generation agents failed to produce valid output.",
             validation_score=0.0,
-            diversity_metric=0.0,
+            confidence_delta=0.0,
             judge_decision=None,
             logician_output=logician_output,
             creative_output=creative_output,
@@ -233,11 +309,19 @@ async def run_micro_mode(
         )
     except Exception as exc:
         logger.error("Synthesis judge failed: %s", exc)
+        if passport is not None:
+            passport.record_error("judge", str(exc))
+        if conversation_director is not None and session_id:
+            try:
+                from orchestrator.conversation import ConversationState
+                conversation_director.transition_state(session_id, ConversationState.FAILED)
+            except Exception:
+                pass
         return MicroModeResult(
             status="error",
             winning_answer=f"Logic judge evaluation failed: {exc}",
             validation_score=0.0,
-            diversity_metric=0.0,
+            confidence_delta=0.0,
             judge_decision=None,
             logician_output=logician_output,
             creative_output=creative_output,
@@ -246,15 +330,24 @@ async def run_micro_mode(
     # Guard: parse_and_repair can return a dict on parse failure.
     if isinstance(final_output, dict):
         logger.error("Judge output parse failure: %s", final_output)
+        if conversation_director is not None and session_id:
+            try:
+                from orchestrator.conversation import ConversationState
+                conversation_director.transition_state(session_id, ConversationState.FAILED)
+            except Exception:
+                pass
         return MicroModeResult(
             status="error",
             winning_answer=f"Judge output unparseable: {final_output.get('answer', 'unknown')}",
             validation_score=0.0,
-            diversity_metric=0.0,
+            confidence_delta=0.0,
             judge_decision=None,
             logician_output=logician_output,
             creative_output=creative_output,
         )
+
+    if passport is not None:
+        passport.add_agent_output("judge", final_output)
 
     # Stateful failure tracking (epistemic loop failures)
     if final_output.validation_score < 7.0:
@@ -271,27 +364,83 @@ async def run_micro_mode(
     # ── Step 4: Assemble result ──────────────────────────────────────
     logger.info("Step 4/4 — Assembling final micro-mode result.")
 
-    decision_dict = {
-        "verdict": "synthesized",
-        "score_a": final_output.validation_score,
-        "score_b": final_output.validation_score,
-        "justification": (
-            f"Confidence: {final_output.overall_confidence} | "
-            f"Bias Risk: {final_output.overall_bias_risk} | "
-            f"Disagreements: {', '.join(final_output.disagreement_notes) if final_output.disagreement_notes else 'None'}"
-        ),
-    }
+    decision_dict = build_decision_dict(
+        logician_agent.confidence,
+        creative_agent.confidence,
+        final_output.overall_confidence,
+        final_output.overall_bias_risk,
+        final_output.disagreement_notes,
+    )
 
-    diversity_metric = _calculate_diversity_metric(logician_agent, creative_agent)
+    confidence_delta = _calculate_confidence_delta(logician_agent, creative_agent)
+
+    # ── Claim extraction (legacy path) ──────────────────────────────
+    all_claims: list[Any] = []
+    if claim_manager is not None:
+        from datetime import datetime as _dt
+
+        for agent_name, agent_output in [
+            ("breaker", breaker_output),
+            ("logician", logician_output),
+            ("creative", creative_output),
+            ("judge", final_output),
+        ]:
+            answer_text = ""
+            if agent_output is not None:
+                if hasattr(agent_output, "answer"):
+                    answer_text = agent_output.answer
+                elif isinstance(agent_output, dict):
+                    answer_text = agent_output.get("answer", "")
+            if answer_text:
+                extracted = claim_manager.extract_claims(answer_text, agent_name)
+                for claim in extracted:
+                    claim_manager.validate_claim(claim)
+                    if reasoning_graph is not None:
+                        claim_manager.store_claim(claim, reasoning_graph)
+                    claim_manager.track_claim_provenance(
+                        claim,
+                        source=agent_name,
+                        timestamp=_dt.utcnow(),
+                        validation_method="regex_extraction",
+                    )
+                all_claims.extend(extracted)
+
+    unverified = claim_manager.get_unverified_claims(
+        claims=all_claims,
+    ) if claim_manager is not None else []
+
+    if unverified and passport is not None:
+        for c in unverified:
+            passport.record_warning(
+                f"Unverified claim from {c.source_agent}: {c.content[:100]}"
+            )
+
+    unverified_dicts = [
+        {
+            "claim_id": c.claim_id,
+            "content": c.content,
+            "claim_type": c.claim_type.value,
+            "confidence": c.confidence,
+            "source_agent": c.source_agent,
+        }
+        for c in unverified
+    ]
+
+    # ── Conversation completion (Task 21.5, legacy path) ─────────────
+    conversation_metadata = complete_conversation_session(
+        conversation_director, session_id, final_output.final_answer, "completed", logger
+    ) or conversation_metadata
 
     return MicroModeResult(
         status="success",
         winning_answer=final_output.final_answer,
         validation_score=final_output.validation_score,
-        diversity_metric=diversity_metric,
+        confidence_delta=confidence_delta,
         judge_decision=decision_dict,
         logician_output=logician_output,
         creative_output=creative_output,
+        unverified_claims=unverified_dicts,
+        conversation_metadata=conversation_metadata,
     )
 
 
@@ -333,30 +482,10 @@ async def stream_micro_mode(
         return "Low"
 
     # Assemble layered system prompts
-    breaker_sys = assemble_agent_prompt(
-        role="Breaker",
-        pipeline_stage="Pre-Filter",
-        objective="Knowledge Absence Detection",
-        iteration=1,
-        execution_mode=strategy.mode.value,
-        system_prompt_filename="04_breaker.xml"
-    )
-    logician_sys = assemble_agent_prompt(
-        role="Logician",
-        pipeline_stage="Generation",
-        objective="Logical Validation",
-        iteration=1,
-        execution_mode=strategy.mode.value,
-        system_prompt_filename="05_logician.xml"
-    )
-    creative_sys = assemble_agent_prompt(
-        role="Creative",
-        pipeline_stage="Generation",
-        objective="Creative Expansion",
-        iteration=1,
-        execution_mode=strategy.mode.value,
-        system_prompt_filename="06_creative.xml"
-    )
+    prompts = assemble_generation_prompts(strategy.mode.value)
+    breaker_sys = prompts["breaker"]
+    logician_sys = prompts["logician"]
+    creative_sys = prompts["creative"]
 
     # ── Step 1: Breaker gate ─────────────────────────────────────────
     yield {"event": "agent_started", "agent": "Breaker"}
@@ -399,7 +528,7 @@ async def stream_micro_mode(
                     status="aborted",
                     winning_answer=reason,
                     validation_score=0.0,
-                    diversity_metric=0.0,
+                    confidence_delta=0.0,
                     judge_decision=None,
                     logician_output=None,
                     creative_output=None,
@@ -571,24 +700,21 @@ async def stream_micro_mode(
     }
 
     # ── Step 4: Assemble result ──────────────────────────────────────
-    decision_dict = {
-        "verdict": "synthesized",
-        "score_a": final_output.validation_score,
-        "score_b": final_output.validation_score,
-        "justification": (
-            f"Confidence: {final_output.overall_confidence} | "
-            f"Bias Risk: {final_output.overall_bias_risk} | "
-            f"Disagreements: {', '.join(final_output.disagreement_notes) if final_output.disagreement_notes else 'None'}"
-        ),
-    }
+    decision_dict = build_decision_dict(
+        logician_agent.confidence,
+        creative_agent.confidence,
+        final_output.overall_confidence,
+        final_output.overall_bias_risk,
+        final_output.disagreement_notes,
+    )
 
-    diversity_metric = _calculate_diversity_metric(logician_agent, creative_agent)
+    confidence_delta = _calculate_confidence_delta(logician_agent, creative_agent)
 
     result = MicroModeResult(
         status="success",
         winning_answer=final_output.final_answer,
         validation_score=final_output.validation_score,
-        diversity_metric=diversity_metric,
+        confidence_delta=confidence_delta,
         judge_decision=decision_dict,
         logician_output=logician_output,
         creative_output=creative_output,
@@ -658,17 +784,369 @@ def _ensure_agent_output(
     )
 
 
-def _calculate_diversity_metric(
+def _calculate_confidence_delta(
     logician_agent: AgentOutput,
     creative_agent: AgentOutput,
 ) -> float:
-    """Return a bounded lexical/output divergence score for two agent answers."""
-    answer_a = logician_agent.answer.strip().lower()
-    answer_b = creative_agent.answer.strip().lower()
-    if not answer_a and not answer_b:
-        return 0.0
+    """Return the absolute difference between Logician and Creative confidence scores."""
+    return abs(logician_agent.confidence - creative_agent.confidence)
 
-    lexical_distance = 1.0 - SequenceMatcher(None, answer_a, answer_b).ratio()
-    confidence_delta = abs(logician_agent.confidence - creative_agent.confidence)
-    score = (lexical_distance * 0.8) + (confidence_delta * 0.2)
-    return round(max(0.0, min(1.0, score)), 4)
+
+# ── Decision-Engine Pipeline Path (Task 21.3) ────────────────────────────
+
+
+async def _run_with_decision_engine(
+    *,
+    user_query: str,
+    gateway: AsyncAPIGateway,
+    strategy: ProviderStrategy,
+    pool: ProviderPool,
+    history: list[dict[str, str]] | None,
+    passport: ExecutionPassport | None,
+    decision_engine: Any,
+    reasoning_graph: Any | None,
+    claim_manager: Any | None,
+    streaming_manager: Any | None,
+    conversation_director: Any | None = None,
+    session_id: str | None = None,
+) -> MicroModeResult:
+    """Execute the pipeline using the :class:`DecisionEngine` gate architecture.
+
+    This is the Task 21.3 integration path that delegates Breaker,
+    generation, and Judge logic to the DecisionEngine while tracking
+    state via the ExecutionPassport.
+    """
+    from orchestrator.streaming import EventType, StreamEvent
+
+    # ── Conversation context (Task 21.5) ────────────────────────────
+    history, conversation_metadata = init_conversation_context(
+        conversation_director, session_id, logger
+    )
+
+    # ── Step 1: Breaker gate ─────────────────────────────────────────
+    logger.info("Step 1/4 — Breaker gate (DecisionEngine, timeout=%dms).",
+                decision_engine.BREAKER_TIMEOUT_MS)
+
+    if passport is not None:
+        passport.update_stage("breaker")
+
+    if streaming_manager is not None and passport is not None:
+        await streaming_manager.emit(
+            passport.request_id,
+            EventType.AGENT_STARTED,
+            {"agent_name": "Breaker", "request_id": passport.request_id},
+        )
+
+    should_continue, breaker_output = await decision_engine.execute_breaker_gate(
+        query=user_query,
+        gateway=gateway,
+        strategy=strategy,
+        pool=pool,
+        passport=passport or _null_passport(),
+        history=history,
+    )
+
+    if passport is not None and breaker_output is not None:
+        passport.add_agent_output("breaker", breaker_output)
+
+    if streaming_manager is not None and passport is not None:
+        await streaming_manager.emit(
+            passport.request_id,
+            EventType.AGENT_COMPLETED,
+            {"agent_name": "Breaker", "request_id": passport.request_id},
+        )
+
+    if not should_continue:
+        reason = (
+            breaker_output.answer
+            if breaker_output is not None
+            else "Breaker gate failed (timeout or error)"
+        )
+        logger.warning("Breaker gate ABORTED pipeline: %s", reason)
+        if passport is not None:
+            passport.update_stage("aborted")
+        # Transition conversation state to FAILED on abort
+        if conversation_director is not None and session_id:
+            try:
+                from orchestrator.conversation import ConversationState
+                conversation_director.transition_state(session_id, ConversationState.FAILED)
+                conversation_metadata = conversation_director.get_metadata(session_id)
+            except Exception as exc:
+                logger.warning("Conversation transition error: %s", exc)
+        return MicroModeResult(
+            status="aborted",
+            winning_answer=reason,
+            validation_score=0.0,
+            confidence_delta=0.0,
+            judge_decision=None,
+            logician_output=None,
+            creative_output=None,
+            conversation_metadata=conversation_metadata,
+        )
+
+    logger.info("Breaker gate passed — proceeding to generation.")
+
+    # ── Step 2: Parallel Logician + Creative (30s timeout) ───────────
+    logger.info("Step 2/4 — Parallel generation (DecisionEngine, timeout=%ds).",
+                decision_engine.PARALLEL_AGENT_TIMEOUT_SEC)
+
+    if passport is not None:
+        passport.update_stage("generating")
+
+    if streaming_manager is not None and passport is not None:
+        await streaming_manager.emit(
+            passport.request_id,
+            EventType.AGENT_STARTED,
+            {"agent_name": "Logician", "request_id": passport.request_id},
+        )
+        await streaming_manager.emit(
+            passport.request_id,
+            EventType.AGENT_STARTED,
+            {"agent_name": "Creative", "request_id": passport.request_id},
+        )
+
+    logician_output, creative_output = await decision_engine.execute_generation_agents(
+        query=user_query,
+        gateway=gateway,
+        strategy=strategy,
+        pool=pool,
+        passport=passport or _null_passport(),
+        history=history,
+    )
+
+    # Track agent outputs in passport
+    if passport is not None:
+        if logician_output is not None:
+            passport.add_agent_output("logician", logician_output)
+        if creative_output is not None:
+            passport.add_agent_output("creative", creative_output)
+
+    if streaming_manager is not None and passport is not None:
+        for agent_name in ("Logician", "Creative"):
+            await streaming_manager.emit(
+                passport.request_id,
+                EventType.AGENT_COMPLETED,
+                {"agent_name": agent_name, "request_id": passport.request_id},
+            )
+
+    # Both agents failed — abort
+    if logician_output is None and creative_output is None:
+        logger.error("Both Logician and Creative agents failed.")
+        if passport is not None:
+            passport.record_error("generation", "Both Logician and Creative agents failed")
+            passport.update_stage("failed")
+        # Transition conversation state to FAILED
+        if conversation_director is not None and session_id:
+            try:
+                from orchestrator.conversation import ConversationState
+                conversation_director.transition_state(session_id, ConversationState.FAILED)
+                conversation_metadata = conversation_director.get_metadata(session_id)
+            except Exception as exc:
+                logger.warning("Conversation transition error: %s", exc)
+        return MicroModeResult(
+            status="error",
+            winning_answer="Both generation agents failed to produce valid output.",
+            validation_score=0.0,
+            confidence_delta=0.0,
+            judge_decision=None,
+            logician_output=None,
+            creative_output=None,
+            conversation_metadata=conversation_metadata,
+        )
+
+    # ── Step 3: Judge synthesis ──────────────────────────────────────
+    logger.info("Step 3/4 — Judge synthesis (DecisionEngine).")
+
+    if passport is not None:
+        passport.update_stage("evaluating")
+
+    # Retrieve failure patterns from reasoning graph
+    lessons = ""
+    if reasoning_graph is not None:
+        patterns = reasoning_graph.get_failure_patterns(user_query)
+        if patterns:
+            lesson_parts = [
+                f"Past failure for similar query: {p.get('explanation', '')} "
+                f"(score={p.get('score', 0.0)})"
+                for p in patterns[:3]
+            ]
+            lessons = "; ".join(lesson_parts)
+            logger.info(
+                "Retrieved %d failure pattern(s) from reasoning graph.",
+                len(patterns),
+            )
+
+    # Also check epistemic memory for additional lessons
+    from orchestrator.memory import epistemic_memory
+
+    em_lessons = epistemic_memory.get_lessons_learned(user_query)
+    if em_lessons:
+        lessons = f"{lessons}; {em_lessons}" if lessons else em_lessons
+
+    if streaming_manager is not None and passport is not None:
+        await streaming_manager.emit(
+            passport.request_id,
+            EventType.AGENT_STARTED,
+            {"agent_name": "Judge", "request_id": passport.request_id},
+        )
+
+    final_output = await decision_engine.execute_judge_synthesis(
+        query=user_query,
+        logician_output=logician_output,
+        creative_output=creative_output,
+        gateway=gateway,
+        strategy=strategy,
+        pool=pool,
+        passport=passport or _null_passport(),
+        lessons=lessons,
+        history=history,
+    )
+
+    if passport is not None:
+        passport.add_agent_output("judge", final_output)
+
+    if streaming_manager is not None and passport is not None:
+        await streaming_manager.emit(
+            passport.request_id,
+            EventType.AGENT_COMPLETED,
+            {"agent_name": "Judge", "request_id": passport.request_id},
+        )
+
+    # Record failure pattern in reasoning graph for low scores
+    if final_output.validation_score < 7.0:
+        logger.warning(
+            "Low validation score (%f) — recording failure pattern.",
+            final_output.validation_score,
+        )
+        epistemic_memory.record_failure(
+            query=user_query,
+            explanation=(
+                ", ".join(final_output.disagreement_notes)
+                or "Low validation score."
+            ),
+            score=final_output.validation_score,
+        )
+        if reasoning_graph is not None:
+            agent_outputs = {}
+            if logician_output is not None:
+                agent_outputs["logician"] = (
+                    logician_output.model_dump()
+                    if hasattr(logician_output, "model_dump")
+                    else str(logician_output)
+                )
+            if creative_output is not None:
+                agent_outputs["creative"] = (
+                    creative_output.model_dump()
+                    if hasattr(creative_output, "model_dump")
+                    else str(creative_output)
+                )
+            reasoning_graph.record_failure_pattern(
+                query=user_query,
+                explanation=(
+                    ", ".join(final_output.disagreement_notes)
+                    or "Low validation score."
+                ),
+                score=final_output.validation_score,
+                agent_outputs=agent_outputs,
+            )
+
+    # ── Step 4: Assemble result ──────────────────────────────────────
+    logger.info("Step 4/4 — Assembling final micro-mode result.")
+
+    if passport is not None:
+        passport.update_stage("completed")
+
+    logician_agent = _ensure_agent_output(
+        logician_output, "Logician"
+    ) if logician_output is not None else AgentOutput(
+        reasoning_steps=[], answer="", confidence=0.0,
+    )
+    creative_agent = _ensure_agent_output(
+        creative_output, "Creative"
+    ) if creative_output is not None else AgentOutput(
+        reasoning_steps=[], answer="", confidence=0.0,
+    )
+
+    decision_dict = build_decision_dict(
+        logician_agent.confidence,
+        creative_agent.confidence,
+        final_output.overall_confidence,
+        final_output.overall_bias_risk,
+        final_output.disagreement_notes,
+    )
+
+    confidence_delta = _calculate_confidence_delta(logician_agent, creative_agent)
+
+    # ── Claim extraction (Task 21.4 integration) ─────────────────────
+    all_claims: list[Any] = []
+    if claim_manager is not None:
+        from datetime import datetime as _dt
+
+        for agent_name, agent_output in [
+            ("breaker", breaker_output),
+            ("logician", logician_output),
+            ("creative", creative_output),
+            ("judge", final_output),
+        ]:
+            answer_text = ""
+            if agent_output is not None:
+                if hasattr(agent_output, "answer"):
+                    answer_text = agent_output.answer
+                elif isinstance(agent_output, dict):
+                    answer_text = agent_output.get("answer", "")
+            if answer_text:
+                extracted = claim_manager.extract_claims(answer_text, agent_name)
+                for claim in extracted:
+                    claim_manager.validate_claim(claim)
+                    if reasoning_graph is not None:
+                        claim_manager.store_claim(claim, reasoning_graph)
+                    claim_manager.track_claim_provenance(
+                        claim,
+                        source=agent_name,
+                        timestamp=_dt.utcnow(),
+                        validation_method="regex_extraction",
+                    )
+                all_claims.extend(extracted)
+
+    unverified = claim_manager.get_unverified_claims(
+        claims=all_claims,
+    ) if claim_manager is not None else []
+
+    if unverified and passport is not None:
+        for c in unverified:
+            passport.record_warning(
+                f"Unverified claim from {c.source_agent}: {c.content[:100]}"
+            )
+
+    unverified_dicts = [
+        {
+            "claim_id": c.claim_id,
+            "content": c.content,
+            "claim_type": c.claim_type.value,
+            "confidence": c.confidence,
+            "source_agent": c.source_agent,
+        }
+        for c in unverified
+    ]
+
+    # ── Conversation completion (Task 21.5) ─────────────────────────
+    conversation_metadata = complete_conversation_session(
+        conversation_director, session_id, final_output.final_answer, "completed", logger
+    ) or conversation_metadata
+
+    return MicroModeResult(
+        status="success",
+        winning_answer=final_output.final_answer,
+        validation_score=final_output.validation_score,
+        confidence_delta=confidence_delta,
+        judge_decision=decision_dict,
+        logician_output=logician_output,
+        creative_output=creative_output,
+        unverified_claims=unverified_dicts,
+        conversation_metadata=conversation_metadata,
+    )
+
+
+def _null_passport() -> ExecutionPassport:
+    """Return a throwaway passport for DecisionEngine calls when none is supplied."""
+    return ExecutionPassport()

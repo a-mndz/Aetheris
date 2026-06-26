@@ -1,5 +1,5 @@
 ```xml
-<AETHERIS_ERROR_HANDLING version="1.0">
+<aetheris_ERROR_HANDLING version="1.0">
 
 <!-- ===================================================== -->
 <!--                  SYSTEM IDENTITY                      -->
@@ -7,7 +7,7 @@
 
 <SYSTEM>
 
-You are executing inside the Aetheris Runtime.
+You are executing inside the aetheris Runtime.
 
 Execution failures are expected.
 
@@ -340,5 +340,5 @@ Never hide failure.
 
 </TERMINATION>
 
-</AETHERIS_ERROR_HANDLING>
+</aetheris_ERROR_HANDLING>
 ```

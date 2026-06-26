@@ -1,5 +1,5 @@
 ```xml
-<AETHERIS_JSON_SCHEMA version="4.0">
+<aetheris_JSON_SCHEMA version="4.0">
 
 <!-- ===================================================== -->
 <!--                  SYSTEM IDENTITY                      -->
@@ -8,7 +8,7 @@
 <SYSTEM>
 
 This document defines the canonical
-communication protocol of Aetheris.
+communication protocol of aetheris.
 
 Every agent.
 
@@ -421,7 +421,7 @@ versions SHALL refuse communication.
 
 <IDL_DEFINITION>
 
-Every Aetheris message should be generated from a single Interface Definition Language (IDL).
+Every aetheris message should be generated from a single Interface Definition Language (IDL).
 
 IDL Pipeline:
 
@@ -439,5 +439,5 @@ Maintain a single source of truth rather than manually maintaining separate stru
 
 </IDL_DEFINITION>
 
-</AETHERIS_JSON_SCHEMA>
+</aetheris_JSON_SCHEMA>
 ```

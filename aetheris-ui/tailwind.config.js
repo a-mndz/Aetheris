@@ -3,6 +3,14 @@ export default {
   content: ['./index.html', './src/**/*.{js,jsx}'],
   darkMode: 'class',
   theme: {
+    // Explicitly configure responsive breakpoints per design system
+    screens: {
+      sm: '640px',
+      md: '768px',  // Tablet: 768px-1023px
+      lg: '1024px', // Desktop: 1024px-1279px
+      xl: '1280px', // Large Desktop: 1280px+
+      '2xl': '1536px',
+    },
     extend: {
       colors: {
         surface: {
