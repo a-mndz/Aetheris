@@ -136,25 +136,36 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 4. Configure environment variables (optional)
-Create a `.env` file in the project root:
+### 4. Configure secrets and environment variables
+Provider API keys are loaded from the OS-native secret store through `secrets_bootstrap.py`, then exported into the `AETHERIS_*` environment variables expected by `core/config.py`. Keep live keys out of `.env` and out of version control.
+
+One-time setup per developer machine:
 ```bash
-# OpenRouter (recommended — gives access to 100+ models)
-aetheris_OPENROUTER_API_KEY=sk-or-v1-xxxxxxxx
-
-# Groq (fast inference)
-aetheris_GROQ_API_KEY=gsk_xxxxxxxx
-
-# NVIDIA NIM
-aetheris_NVIDIA_NIM_API_KEY=nvapi-xxxxxxxx
-
-# GitHub Models
-aetheris_GITHUB_TOKEN=ghp_xxxxxxxx
-
-# Logging
-aetheris_LOG_LEVEL=INFO
+pip install keyring
 ```
-*(Note: If you leave keys blank, the system defaults to Simulation Mode).*
+
+```powershell
+"sk-or-v1-..." | keyring set Aetheris OPENROUTER_API_KEY
+"gsk_..."      | keyring set Aetheris GROQ_API_KEY
+"nvapi-..."    | keyring set Aetheris NVIDIA_NIM_API_KEY
+"ghp_..."      | keyring set Aetheris GITHUB_TOKEN
+"..."          | keyring set Aetheris MISTRAL_API_KEY
+"..."          | keyring set Aetheris GOOGLE_API_KEY
+"sk-..."       | keyring set Aetheris OPENAI_API_KEY
+"..."          | keyring set Aetheris KIE_API_KEY
+"..."          | keyring set Aetheris UNLI_DEV_API_KEY
+```
+
+The keyring service name is `Aetheris`. The account names are the bare config field names, without the `AETHERIS_` prefix.
+
+Use `.env` only for non-secret local runtime settings, for example:
+```bash
+AETHERIS_LOG_LEVEL=INFO
+DATABASE_URL=postgresql+asyncpg://postgres@localhost:5432/postgres
+AETHERIS_JWT_SECRET_KEY=replace-with-a-local-development-secret-at-least-32-chars
+```
+
+If no provider keys are present in the OS secret store or environment, the system defaults to Simulation Mode.
 
 ---
 
