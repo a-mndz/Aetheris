@@ -86,35 +86,35 @@ export default function AgentStreamCard({ name, agent }) {
       transition={{ duration: 0.25, ease: 'easeOut' }}
       className={`rounded-xl glass-panel ring-1 ${config.ring} overflow-hidden`}
     >
-      {/* Header */}
       <button
         onClick={() => setExpanded((v) => !v)}
-        className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left hover:bg-white/[0.02] transition-colors"
+        className="flex w-full touch-target items-center gap-2.5 px-3.5 py-2.5 text-left hover:bg-white/[0.02] transition-colors"
+        aria-expanded={expanded}
+        aria-controls={`agent-stream-${name}`}
+        aria-label={`${name} agent: ${isRunning ? 'running' : isDone ? 'complete' : isError ? 'failed' : 'pending'}`}
       >
-        <span className="text-base flex-shrink-0">{config.emoji}</span>
+        <span className="text-base flex-shrink-0" aria-hidden="true">{config.emoji}</span>
         <span className={`text-sm font-semibold ${config.textColor} flex-1`}>{name}</span>
 
-        {/* Status indicator */}
         {isRunning && (
-          <Loader2 className={`h-3.5 w-3.5 ${config.textColor} animate-spin`} />
+          <Loader2 className={`h-3.5 w-3.5 ${config.textColor} animate-spin`} aria-hidden="true" />
         )}
         {isDone && (
-          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" aria-hidden="true" />
         )}
         {isError && (
-          <XCircle className="h-3.5 w-3.5 text-rose-400" />
+          <XCircle className="h-3.5 w-3.5 text-rose-400" aria-hidden="true" />
         )}
 
-        {/* Confidence chip */}
         <ConfidenceChip confidence={agent.confidence} />
 
-        {/* Progress percentage */}
         {isRunning && (
-          <span className="text-[10px] font-mono text-slate-500">{progressPct}%</span>
+          <span className="text-[10px] font-mono text-slate-500" aria-label={`${progressPct}% progress`}>{progressPct}%</span>
         )}
 
         <ChevronDown
           className={`h-3 w-3 text-slate-500 transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`}
+          aria-hidden="true"
         />
       </button>
 
@@ -146,16 +146,18 @@ export default function AgentStreamCard({ name, agent }) {
         </div>
       )}
 
-      {/* Expandable details */}
       <AnimatePresence initial={false}>
         {expanded && (
           <motion.div
+            id={`agent-stream-${name}`}
             key="details"
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
             transition={{ duration: 0.2, ease: 'easeInOut' }}
             className="overflow-hidden"
+            role="region"
+            aria-label={`${name} details`}
           >
             <div className="px-3.5 pb-3 space-y-2">
               {/* Progress timeline */}

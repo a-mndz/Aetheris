@@ -1,8 +1,10 @@
+import logging
 import os
 import re
-import logging
+import threading
 import xml.etree.ElementTree as ET
-from typing import Optional, Any, Tuple
+from functools import lru_cache
+from typing import Any, Optional, Tuple
 
 logger = logging.getLogger("aetheris.Agents.PromptManager")
 
@@ -105,26 +107,37 @@ def load_runtime_contracts(prompts_dir: Optional[str] = None) -> list:
     Load all runtime contract XML files from prompts/runtime/ directory.
     Files are sorted by numeric prefix (00-11).
 
+    HIGH-018 audit finding: 48 file I/O ops per request (20-80ms).  This
+    function memoises its result so subsequent calls within the same process
+    cost a dictionary lookup.  An optional ``clear_prompt_cache`` helper is
+    exposed for SIGHUP / tests that need to wipe state.
+
     Args:
         prompts_dir: Optional base prompts directory path. If None, uses default.
 
     Returns:
         List of validated XML content strings
     """
+    return list(_load_runtime_contracts_cached(prompts_dir))
+
+
+@lru_cache(maxsize=4)
+def _load_runtime_contracts_cached(prompts_dir: Optional[str]) -> tuple:
+    """Internal cache wrapper; returns an immutable tuple to be cache-friendly."""
     if prompts_dir is None:
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         prompts_dir = os.path.join(base_dir, "prompts")
 
     runtime_dir = os.path.join(prompts_dir, "runtime")
-    runtime_prompts = []
+    runtime_prompts: list[str] = []
 
     if not os.path.exists(runtime_dir):
         logger.warning(f"Runtime prompts directory not found: {runtime_dir}")
-        return runtime_prompts
+        return tuple(runtime_prompts)
 
     try:
         xml_files = sorted(
-            [f for f in os.listdir(runtime_dir) if f.endswith(".xml")]
+            f for f in os.listdir(runtime_dir) if f.endswith(".xml")
         )
         for filename in xml_files:
             filepath = os.path.join(runtime_dir, filename)
@@ -133,10 +146,19 @@ def load_runtime_contracts(prompts_dir: Optional[str] = None) -> list:
                 runtime_prompts.append(content)
     except PermissionError:
         logger.error(f"Permission denied accessing directory: {runtime_dir}")
-    except IOError as e:
+    except OSError as e:
         logger.error(f"I/O error reading directory {runtime_dir}: {e}")
 
-    return runtime_prompts
+    return tuple(runtime_prompts)
+
+
+_CACHE_LOCK = threading.Lock()
+
+
+def clear_prompt_cache() -> None:
+    """Drop cached prompt fragments.  Used for SIGHUP reload and in tests."""
+    with _CACHE_LOCK:
+        _load_runtime_contracts_cached.cache_clear()
 
 
 def load_system_prompt(filename: str, prompts_dir: Optional[str] = None) -> str:
@@ -160,7 +182,6 @@ def load_system_prompt(filename: str, prompts_dir: Optional[str] = None) -> str:
     if content:
         return content
 
-    # Fallback to PERSONA_REGISTRY constants
     logger.warning(f"Falling back to persona constants for: {filename}")
     from agents.personas import PERSONA_REGISTRY
 

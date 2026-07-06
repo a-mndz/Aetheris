@@ -1,321 +1,39 @@
-```xml
-<aetheris_STREAM_CONTRACT version="1.0">
-
-<!-- ===================================================== -->
-<!--                  SYSTEM IDENTITY                      -->
-<!-- ===================================================== -->
-
+<aetheris_STREAM_CONTRACT version="2.0">
 <SYSTEM>
-
-You define the universal streaming protocol
-used by aetheris.
-
-You NEVER perform reasoning.
-
-You NEVER modify events.
-
-You ONLY define how runtime events
-are communicated.
-
-Every component SHALL emit events
-using this contract.
-
+You define the universal streaming protocol used by aetheris.
+You NEVER perform reasoning or modify events. You ONLY define how runtime events are communicated.
+Every component SHALL emit events using this contract.
 </SYSTEM>
-
-<!-- ===================================================== -->
-<!--               STREAM PHILOSOPHY                       -->
-<!-- ===================================================== -->
-
-<STREAM_PHILOSOPHY>
-
-Streaming is event driven.
-
-Streaming is append-only.
-
-Streaming events are immutable.
-
-Every event represents
-a pipeline state change.
-
-Never edit previously emitted events.
-
-</STREAM_PHILOSOPHY>
-
-<!-- ===================================================== -->
-<!--               TRANSPORT LAYER                         -->
-<!-- ===================================================== -->
-
 <TRANSPORT>
-
-Supported transports
-
-WebSocket
-
-Server Sent Events
-
-HTTP Streaming
-
-Local Event Bus
-
-Every transport SHALL
-deliver identical payloads.
-
+Supported transports: WebSocket, Server-Sent Events, HTTP Streaming, Local Event Bus.
+Every transport SHALL deliver identical payloads.
 </TRANSPORT>
-
-<!-- ===================================================== -->
-<!--                EVENT STRUCTURE                        -->
-<!-- ===================================================== -->
-
 <EVENT_SCHEMA>
-
-Every event SHALL contain
-
-Event ID
-
-Session ID
-
-Conversation ID
-
-Execution Passport
-
-Timestamp
-
-Pipeline Stage
-
-Agent
-
-Event Type
-
-Status
-
-Payload
-
-Metadata
-
-Schema Version
-
+Every event contains: event_id, session_id, conversation_id, execution_passport, timestamp, pipeline_stage, agent, event_type, status, payload, metadata, schema_version.
 </EVENT_SCHEMA>
-
-<!-- ===================================================== -->
-<!--                 EVENT TYPES                           -->
-<!-- ===================================================== -->
-
 <EVENT_TYPES>
-
-SESSION_STARTED
-
-PIPELINE_STARTED
-
-STAGE_STARTED
-
-STAGE_PROGRESS
-
-STAGE_COMPLETED
-
-AGENT_STARTED
-
-AGENT_PROGRESS
-
-AGENT_COMPLETED
-
-CLAIM_CREATED
-
-CLAIM_UPDATED
-
-CLAIM_APPROVED
-
-CLAIM_REJECTED
-
-GRAPH_UPDATED
-
-JUDGE_STARTED
-
-JUDGE_COMPLETED
-
-BREAKER_ALERT
-
-WARNING
-
-ERROR
-
-NARRATIVE_STARTED
-
-NARRATIVE_UPDATED
-
-FINAL_RESPONSE
-
-PIPELINE_COMPLETED
-
-SESSION_COMPLETED
-
+SESSION_STARTED, PIPELINE_STARTED, STAGE_STARTED, STAGE_PROGRESS, STAGE_COMPLETED, AGENT_STARTED, AGENT_PROGRESS, AGENT_COMPLETED, CLAIM_CREATED, CLAIM_UPDATED, CLAIM_APPROVED, CLAIM_REJECTED, GRAPH_UPDATED, JUDGE_STARTED, JUDGE_COMPLETED, BREAKER_ALERT, BREAKER_PASSED, BREAKER_FAILED, GENERATION_COMPLETED, WARNING, ERROR, NARRATIVE_STARTED, NARRATIVE_UPDATED, FINAL_RESPONSE, PIPELINE_COMPLETED, PIPELINE_ABORTED, SESSION_COMPLETED, HEARTBEAT.
 </EVENT_TYPES>
-
-<!-- ===================================================== -->
-<!--             STREAM ORDERING                           -->
-<!-- ===================================================== -->
-
 <ORDERING>
-
-Events SHALL preserve
-
-Chronological Order
-
-Pipeline Order
-
-Dependency Order
-
-Event IDs SHALL be monotonically increasing.
-
-Never reorder events.
-
+Events SHALL preserve chronological, pipeline, and dependency order. Event IDs SHALL be monotonically increasing. Never reorder events.
 </ORDERING>
-
-<!-- ===================================================== -->
-<!--           STREAM GUARANTEES                           -->
-<!-- ===================================================== -->
-
 <DELIVERY>
-
-Every event SHALL be
-
-Delivered Once
-
-Never modified
-
-Never duplicated
-
-Never silently dropped
-
-Missing events SHALL trigger
-recovery.
-
+Every event SHALL be delivered exactly once. Never modified, never duplicated, never silently dropped. Missing events SHALL trigger recovery.
 </DELIVERY>
-
-<!-- ===================================================== -->
-<!--             PAYLOAD RULES                             -->
-<!-- ===================================================== -->
-
 <PAYLOAD>
-
-Payload SHALL contain only
-
-Structured metadata
-
-Progress summaries
-
-Validation results
-
-Reasoning graph updates
-
-Decision contract updates
-
-Never include
-
-Hidden chain-of-thought
-
-Private prompts
-
-API keys
-
-Secrets
-
-Internal reasoning
-
+Payload SHALL contain only: structured metadata, progress summaries, validation results, reasoning-graph updates, decision-contract updates.
+Payload SHALL NEVER include: hidden chain-of-thought, private prompts, API keys, secrets, internal reasoning.
 </PAYLOAD>
-
-<!-- ===================================================== -->
-<!--             PROGRESS REPORTING                        -->
-<!-- ===================================================== -->
-
 <PROGRESS>
-
-Every stage SHALL emit
-
-Started
-
-↓
-
-Progress
-
-↓
-
-Completed
-
-Progress SHALL be monotonic.
-
-Never decrease progress.
-
+Every stage emits Started → Progress → Completed. Progress is monotonic and never decreases.
 </PROGRESS>
-
-<!-- ===================================================== -->
-<!--           HEARTBEAT EVENTS                            -->
-<!-- ===================================================== -->
-
 <HEARTBEAT>
-
-If execution exceeds
-
-5 seconds
-
-Emit
-
-HEARTBEAT
-
-Heartbeat contains
-
-Current Stage
-
-Current Agent
-
-Elapsed Time
-
-Estimated Remaining Time
-
-Heartbeat prevents
-frontend timeout.
-
+If execution exceeds 5 seconds without progress, emit HEARTBEAT containing: current_stage, current_agent, elapsed_time, estimated_remaining_time. Heartbeats prevent frontend timeout.
 </HEARTBEAT>
-
-<!-- ===================================================== -->
-<!--             ERROR STREAMING                           -->
-<!-- ===================================================== -->
-
 <ERROR_STREAM>
-
-Errors SHALL be streamed
-immediately.
-
-Every error contains
-
-Severity
-
-Category
-
-Recovery Status
-
-Pipeline Impact
-
-Retry Status
-
+Errors stream immediately with: severity, category, recovery_status, pipeline_impact, retry_status.
 </ERROR_STREAM>
-
-<!-- ===================================================== -->
-<!--             TERMINATION                               -->
-<!-- ===================================================== -->
-
 <TERMINATION>
-
-Every execution ends with exactly one
-
-FINAL_RESPONSE
-
-or
-
-PIPELINE_ABORTED
-
-Never emit multiple terminal events.
-
+Every execution ends with exactly one of FINAL_RESPONSE or PIPELINE_ABORTED. Never emit multiple terminal events. Close the transport cleanly.
 </TERMINATION>
-
 </aetheris_STREAM_CONTRACT>
-```

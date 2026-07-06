@@ -1,4 +1,4 @@
-import { Activity, Menu } from 'lucide-react';
+import { Activity, Menu, Settings, LayoutDashboard } from 'lucide-react';
 
 const STATUS_COLOR = {
   online: 'bg-emerald-400',
@@ -19,16 +19,19 @@ export default function ProviderStatusBar({
   executionMode = 'Multi-Agent',
   onToggleTelemetry,
   onToggleSidebar,
+  onToggleMissionControl,
+  onToggleSettings,
+  missionControlActive,
 }) {
   return (
-    <header className="flex items-center justify-between border-b border-white/5 bg-surface-800/40 px-4 py-2.5 md:px-8">
+    <header className="flex items-center justify-between border-b border-white/5 bg-surface-800/40 px-4 py-2.5 md:px-8" role="banner">
       <div className="flex items-center gap-3">
         <button
           onClick={onToggleSidebar}
-          className="text-slate-400 transition-colors hover:text-slate-200 md:hidden"
+          className="btn-icon touch-target md:hidden"
           aria-label="Open sidebar"
         >
-          <Menu className="h-5 w-5" />
+          <Menu className="h-5 w-5" aria-hidden="true" />
         </button>
         <span className="text-sm font-semibold text-slate-200 md:hidden">Aetheris</span>
         <div className="hidden items-center gap-2 md:flex">
@@ -65,11 +68,28 @@ export default function ProviderStatusBar({
           })}
         </div>
         <button
+          onClick={onToggleMissionControl}
+          className={`touch-target ${missionControlActive ? 'btn-pill-active' : 'btn-pill text-slate-300'}`}
+          aria-label="Toggle Mission Control"
+          aria-pressed={missionControlActive}
+        >
+          <LayoutDashboard className="h-3.5 w-3.5" aria-hidden="true" />
+          <span className="hidden lg:inline">Mission Control</span>
+        </button>
+        <button
+          onClick={onToggleSettings}
+          className="btn-pill touch-target text-slate-300"
+          aria-label="Open settings"
+        >
+          <Settings className="h-3.5 w-3.5" aria-hidden="true" />
+          <span className="hidden sm:inline">Settings</span>
+        </button>
+        <button
           onClick={onToggleTelemetry}
-          className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium text-slate-300 ring-1 ring-white/10 transition-colors hover:bg-white/5"
+          className="btn-pill touch-target text-slate-300"
           aria-label="Open telemetry drawer"
         >
-          <Activity className="h-3.5 w-3.5" />
+          <Activity className="h-3.5 w-3.5" aria-hidden="true" />
           <span className="hidden sm:inline">Telemetry</span>
         </button>
       </div>

@@ -1,39 +1,14 @@
-<aetheris_PROMPT_LOADER>
-
+<aetheris_PROMPT_LOADER version="2.0">
 <SYSTEM>
-
-Every execution consists of four layers.
-
-Layer 1
-
-Runtime Prompt
-
-↓
-
-Layer 2
-
-Role Prompt
-
-↓
-
-Layer 3
-
-Conversation Context
-
-↓
-
-Layer 4
-
-Current Task
-
-Role Prompt overrides Runtime defaults.
-
-Task never overrides Role.
-
-Runtime rules always remain active.
-
-Never ignore higher layers.
-
+Every execution is assembled from four layers in order:
+1. Runtime Prompt (always active).
+2. Role Prompt (agent-specific instructions).
+3. Conversation Context (history, claims, lessons).
+4. Current Task (the immediate user request).
+Higher layers override lower layers EXCEPT: Runtime rules always remain active and Task never overrides Role.
 </SYSTEM>
-
+<LAYER_PRECEDENCE>
+Runtime > Role > Context > Task.
+Runtime rules are immutable. Task cannot override Role.
+</LAYER_PRECEDENCE>
 </aetheris_PROMPT_LOADER>

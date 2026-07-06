@@ -81,26 +81,37 @@ def initialize_aetheris_components() -> dict[str, Any]:
     logger.info("StreamingManager initialized.")
 
     # ── Decision Engine ──────────────────────────────────────────────
-    decision_engine = DecisionEngine(
-        strategy=DecisionStrategy.PARALLEL,
-        streaming_manager=streaming_manager,
-    )
-    logger.info("DecisionEngine initialized (strategy=PARALLEL, streaming=True).")
-
-    # ── Resource Manager ─────────────────────────────────────────────
-    # Import at function level to avoid circular imports
+    # HIGH-009: RuntimeEngine is now wired into DecisionEngine so every
+    # provider call goes through contract enforcement (security,
+    # rate-limiting, streaming, per-agent metrics).  Build the resource
+    # manager first so RuntimeEngine can depend on it.
     from api_gateway.rate_limiter import ResourceManager
 
     resource_manager = ResourceManager()
     logger.info("ResourceManager initialized.")
 
-    # ── Runtime Engine ───────────────────────────────────────────────
     runtime_engine = RuntimeEngine(
         security_validator=security_validator,
         streaming_manager=streaming_manager,
         resource_manager=resource_manager,
     )
-    logger.info("RuntimeEngine initialized (wired: security, streaming, resource).")
+    logger.info(
+        "RuntimeEngine initialized "
+        "(security=%s, streaming=%s, resource=%s).",
+        bool(security_validator),
+        bool(streaming_manager),
+        bool(resource_manager),
+    )
+
+    decision_engine = DecisionEngine(
+        strategy=DecisionStrategy.PARALLEL,
+        streaming_manager=streaming_manager,
+        runtime_engine=runtime_engine,
+    )
+    logger.info(
+        "DecisionEngine initialized (strategy=PARALLEL, streaming=True, "
+        "runtime_engine=wired per HIGH-009)."
+    )
 
     components: dict[str, Any] = {
         "security_validator": security_validator,

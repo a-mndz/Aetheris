@@ -365,3 +365,25 @@ async def get_current_user(
         raise credentials_exception
 
     return user
+
+
+def require_role(required_role: str):
+    """FastAPI dependency factory enforcing role-based access (MED-023).
+
+    Returns a dependency that resolves the current user and raises
+    ``HTTPException(403)`` when the user's ``role`` column does not match the
+    required value.  Use as ``Depends(require_role("admin"))``.
+    """
+
+    async def _role_check(
+        current_user: Annotated[User, Depends(get_current_user)],
+    ) -> User:
+        user_role = getattr(current_user, "role", "user") or "user"
+        if user_role != required_role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Role '{required_role}' required (current role: '{user_role}').",
+            )
+        return current_user
+
+    return _role_check

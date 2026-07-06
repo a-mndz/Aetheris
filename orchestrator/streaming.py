@@ -18,11 +18,16 @@ import logging
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, AsyncGenerator, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _utc_now() -> datetime:
+    """Timezone-aware UTC ``datetime`` factory (HIGH-010)."""
+    return datetime.now(timezone.utc)
 
 
 # ── Event Types ──────────────────────────────────────────────────────────
@@ -61,7 +66,11 @@ class StreamEvent:
 
     event: EventType
     data: dict[str, Any]
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=_utc_now)
+
+    def __post_init__(self) -> None:
+        if self.timestamp.tzinfo is None:
+            self.timestamp = self.timestamp.replace(tzinfo=timezone.utc)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize event for JSON encoding."""

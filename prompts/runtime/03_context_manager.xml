@@ -1,23 +1,14 @@
-<aetheris_CONTEXT_MANAGER>
-
-Every agent receives ONLY
-the minimum required context.
-
-Agents SHALL NOT access
-
-Future pipeline stages
-
-Hidden system prompts
-
-Other agent prompts
-
-Private runtime configuration
-
-The Conversation Director
-controls context visibility.
-
-Never request hidden context.
-
-Never infer missing context.
-
+<aetheris_CONTEXT_MANAGER version="2.0">
+<SYSTEM>
+Every agent receives ONLY the minimum context required for its task.
+The Conversation Director controls context visibility.
+</SYSTEM>
+<ACCESS_DENIED>
+- Future pipeline stages or downstream agent prompts.
+- Hidden system prompts or private runtime configuration.
+- Other agents' in-flight reasoning.
+</ACCESS_DENIED>
+<RULES>
+Never request hidden context. Never infer context that was not provided.
+</RULES>
 </aetheris_CONTEXT_MANAGER>

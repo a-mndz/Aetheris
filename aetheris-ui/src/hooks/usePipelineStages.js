@@ -1,24 +1,19 @@
 import { useCallback, useRef, useState, useEffect } from 'react';
 import { streamQuery } from '../api/client';
 
-/**
- * Initial state for a single agent's streaming data.
- */
+const PIPELINE_TIMEOUT_MS = 900000;
+
 function createAgentState() {
   return {
-    status: 'idle',          // 'idle' | 'running' | 'done' | 'error'
-    progress: [],            // [{ step, total_steps, message }]
-    reasoning_summary: {},   // { section: content }
+    status: 'idle',
+    progress: [],
+    reasoning_summary: {},
     draft_answer: null,
     final_answer: null,
     confidence: null,
   };
 }
 
-/**
- * Derive a coarse pipeline stage from the per-agent states.
- * This keeps backward compatibility with PipelineStatus.
- */
 function derivePipelineStage(agents) {
   if (agents.Judge.status === 'done') return 'done';
   if (agents.Judge.status === 'running') return 'judge';
@@ -27,17 +22,6 @@ function derivePipelineStage(agents) {
   return 'idle';
 }
 
-/**
- * Calculate progress percentage (0-100) based on pipeline stage.
- * Maps each stage to a percentage range according to the design spec:
- * - Prompt Normalizer: 0-10%
- * - Conversation Director: 10-20%
- * - Breaker: 20-35%
- * - Agents (Logician + Creative): 35-70%
- * - Judge (Logic + Factual): 70-85%
- * - Fusion: 85-95%
- * - Response: 95-100%
- */
 export function calculateProgress(stage) {
   const progressMap = {
     idle: 0,
@@ -59,9 +43,9 @@ export function calculateProgress(stage) {
  * real-time granular per-agent SSE events from the backend.
  *
  * Returns:
- *   stage       – coarse pipeline stage ('idle' | 'breaker' | 'agents' | 'judge' | 'done' | 'error')
- *   agentStates – per-agent state object { Breaker, Logician, Creative, Judge }
- *   partialData – partial results streamed mid-pipeline (agent outputs for ReasoningPanel compatibility)
+ *   stage       – coarse pipeline stage
+ *   agentStates – per-agent state object
+ *   partialData – partial results streamed mid-pipeline
  *   progress    – overall progress percentage (0-100)
  *   elapsedMs   – elapsed time in milliseconds since pipeline start
  *   run(query, history) – starts the streaming pipeline
@@ -80,9 +64,10 @@ export function usePipelineStages() {
   const [progress, setProgress] = useState(0);
   const [startTime, setStartTime] = useState(null);
   const [elapsedMs, setElapsedMs] = useState(0);
+  const [liveEvents, setLiveEvents] = useState([]);
   const abortRef = useRef(null);
+  const timeoutRef = useRef(null);
 
-  // Update elapsed time every 100ms when pipeline is running
   useEffect(() => {
     if (!startTime || stage === 'idle' || stage === 'done' || stage === 'error') {
       return;
@@ -95,13 +80,19 @@ export function usePipelineStages() {
     return () => clearInterval(interval);
   }, [startTime, stage]);
 
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, []);
+
   const run = useCallback(async (query, history) => {
-    // Abort any in-flight request
     if (abortRef.current) abortRef.current.abort();
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+
     const controller = new AbortController();
     abortRef.current = controller;
 
-    // Reset all agent states and timing
     const freshAgents = {
       Breaker: createAgentState(),
       Logician: createAgentState(),
@@ -114,8 +105,16 @@ export function usePipelineStages() {
     setProgress(calculateProgress('breaker'));
     setStartTime(Date.now());
     setElapsedMs(0);
+    setLiveEvents([]);
 
-    // Mutable ref for building state inside the event callback
+    timeoutRef.current = setTimeout(() => {
+      if (!controller.signal.aborted) {
+        controller.abort();
+        setStage('error');
+        setProgress(0);
+      }
+    }, PIPELINE_TIMEOUT_MS);
+
     const agentsRef = { ...freshAgents };
 
     const updateAgent = (agentName, patch) => {
@@ -130,6 +129,8 @@ export function usePipelineStages() {
 
     const onEvent = (event) => {
       if (controller.signal.aborted) return;
+
+      setLiveEvents((prev) => [...prev, { timestamp: Date.now(), event: event.event, payload: event }]);
 
       switch (event.event) {
         case 'agent_started': {
@@ -173,8 +174,6 @@ export function usePipelineStages() {
             confidence: event.confidence,
           });
 
-          // Build partial data for backward compatibility with ReasoningPanel
-          // When Logician or Creative completes, add their data to partialData
           if (event.agent === 'Logician' || event.agent === 'Creative') {
             const agentKey = event.agent.toLowerCase();
             const agentData = agentsRef[event.agent];
@@ -202,7 +201,6 @@ export function usePipelineStages() {
           break;
         }
 
-        // Legacy stage events (backward compat — kept just in case)
         case 'stage': {
           if (event.status === 'running') {
             setStage(event.stage);
@@ -227,6 +225,7 @@ export function usePipelineStages() {
         history,
         onEvent,
       });
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
       if (controller.signal.aborted) {
         return { data: null, latencyMs: 0, error: null, aborted: true };
       }
@@ -234,6 +233,7 @@ export function usePipelineStages() {
       setProgress(100);
       return { data, latencyMs, error: null, aborted: false };
     } catch (error) {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
       if (controller.signal.aborted) {
         return { data: null, latencyMs: 0, error: null, aborted: true };
       }
@@ -244,11 +244,13 @@ export function usePipelineStages() {
   }, []);
 
   const reset = useCallback(() => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
     setStage('idle');
     setPartialData(null);
     setProgress(0);
     setStartTime(null);
     setElapsedMs(0);
+    setLiveEvents([]);
     setAgentStates({
       Breaker: createAgentState(),
       Logician: createAgentState(),
@@ -258,6 +260,7 @@ export function usePipelineStages() {
   }, []);
 
   const abort = useCallback(() => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
     if (abortRef.current) {
       abortRef.current.abort();
       abortRef.current = null;
@@ -266,5 +269,5 @@ export function usePipelineStages() {
     setProgress(0);
   }, []);
 
-  return { stage, agentStates, partialData, progress, elapsedMs, run, reset, abort };
+  return { stage, agentStates, partialData, progress, elapsedMs, liveEvents, run, reset, abort };
 }

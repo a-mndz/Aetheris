@@ -7,15 +7,15 @@ function getConfidenceStyle(score) {
 export default function ConfidenceBadge({ score }) {
   if (typeof score !== 'number' || Number.isNaN(score)) {
     return (
-      <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs ring-1 ring-slate-500/30 bg-white/5 text-slate-400">
+      <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs ring-1 ring-slate-500/30 bg-white/5 text-slate-400" role="status" aria-label="Confidence unavailable">
         Confidence unavailable
       </span>
     );
   }
   const { label, dot, text, ring } = getConfidenceStyle(score);
   return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ring-1 bg-white/5 ${ring} ${text}`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
+    <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ring-1 bg-white/5 ${ring} ${text}`} role="status" aria-label={`${label}: ${(score * 100).toFixed(0)}%`}>
+      <span className={`h-1.5 w-1.5 rounded-full ${dot}`} aria-hidden="true" />
       {label} · {(score * 100).toFixed(0)}%
     </span>
   );

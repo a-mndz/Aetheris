@@ -18,6 +18,13 @@ import sys
 import textwrap
 from typing import Any
 
+# CRIT-007: load provider API keys from the OS secret store BEFORE
+# anything that transitively imports ``core.config`` (which validates
+# the keys at construction time).  This module is a no-op if the
+# keyring is empty or unavailable, in which case ``aetherisConfig``
+# falls through to Simulation Mode.
+import secrets_bootstrap  # noqa: F401  (side-effecting import)
+
 from api_gateway import ProviderPool, AsyncAPIGateway, AllModelsExhaustedError, ProviderStrategy
 from api_gateway.rate_limiter import extract_provider_key
 from core.config import get_settings
@@ -120,7 +127,7 @@ def _pretty_print_result(result: dict[str, Any]) -> None:
         print(f"    Score B  : {decision.get('score_b', '—')}")
         rationale = decision.get("justification", "")
         if rationale:
-            print(f"    Rationale:")
+            print("    Rationale:")
             for line in textwrap.wrap(rationale, width=64):
                 print(f"      {line}")
 

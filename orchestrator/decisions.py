@@ -10,30 +10,71 @@ Implements the core decision flow with precise timing specifications:
 """
 
 from __future__ import annotations
+
 import asyncio
 import logging
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Awaitable, Optional
 
 from agents.parser import parse_and_repair
 from agents.prompt_utils import (
     assemble_breaker_prompt,
-    assemble_logician_prompt,
     assemble_creative_prompt,
+    assemble_logician_prompt,
     safe_parse_agent_output,
 )
 from api_gateway.rate_limiter import AsyncAPIGateway, ProviderPool
 from api_gateway.strategy import ProviderStrategy
+from core.error_handlers import execute_with_passport_logging, log_and_record_error, log_and_record_warning
 from core.passport import ExecutionPassport
 from core.schemas import AgentOutput, aetherisOutput
-from core.error_handlers import log_and_record_error, log_and_record_warning, execute_with_passport_logging
 from orchestrator.evaluation import arbitrate_and_synthesize
 from orchestrator.memory import epistemic_memory
-from orchestrator.streaming import StreamEvent, EventType
+from orchestrator.streaming import EventType, StreamEvent
 
 logger = logging.getLogger(__name__)
+
+
+# ── Phase 1 — HIGH-011 streaming task safety ────────────────────────────
+
+
+def _log_task_exception(context: str) -> "callable":
+    """Return an ``add_done_callback`` that logs exceptions from fire-and-forget tasks."""
+
+    def _callback(task: asyncio.Task) -> None:
+        if task.cancelled():
+            logger.debug("Streaming task cancelled: %s", context)
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error(
+                "Streaming task failed: %s — %s: %s",
+                context,
+                type(exc).__name__,
+                exc,
+                exc_info=exc,
+            )
+
+    return _callback
+
+
+def safe_create_task_broadcast(
+    coro: Awaitable[Any],
+    *,
+    name: str = "broadcast",
+) -> asyncio.Task:
+    """Schedule ``coro`` with an error-logging ``add_done_callback``.
+
+    HIGH-011 audit finding: ``asyncio.create_task`` calls in DecisionEngine
+    streaming paths (4 locations) silently swallowed exceptions, masking
+    pipeline regressions in production.  This wrapper attaches a logging
+    callback while preserving the original fire-and-forget semantics.
+    """
+    task = asyncio.create_task(coro, name=name)
+    task.add_done_callback(_log_task_exception(name))
+    return task
 
 
 # ── Enums ────────────────────────────────────────────────────────────────
@@ -91,10 +132,15 @@ class DecisionEngine:
         self,
         strategy: DecisionStrategy = DecisionStrategy.PARALLEL,
         streaming_manager: Any = None,
+        runtime_engine: Any = None,
     ) -> None:
         self.strategy = strategy
         self.metrics = DecisionMetrics()
         self.streaming_manager = streaming_manager
+        # HIGH-009: When supplied, agent execution funnels through the
+        # RuntimeEngine.execute_with_contracts path which enforces security,
+        # rate-limiting, and metrics tracking on every provider call.
+        self.runtime_engine = runtime_engine
 
         # Rolling-window deques (maxlen=100)
         self._breaker_history: deque[bool] = deque(maxlen=self.METRICS_WINDOW_SIZE)
@@ -158,13 +204,16 @@ class DecisionEngine:
                 extra={"stage": "breaker", "confidence": breaker_output.confidence, "absent": True}
             )
             if self.streaming_manager:
-                asyncio.create_task(self.streaming_manager.emit_event(
-                    request_id=passport.request_id,
-                    event=StreamEvent(
-                        event=EventType.BREAKER_FAILED,
-                        data={"confidence": breaker_output.confidence}
-                    )
-                ))
+                safe_create_task_broadcast(
+                    self.streaming_manager.emit_event(
+                        request_id=passport.request_id,
+                        event=StreamEvent(
+                            event=EventType.BREAKER_FAILED,
+                            data={"confidence": breaker_output.confidence}
+                        )
+                    ),
+                    name="breaker-failed-broadcast",
+                )
         else:
             logger.info(
                 "Breaker gate passed (confidence=%.2f).",
@@ -172,13 +221,16 @@ class DecisionEngine:
                 extra={"stage": "breaker", "confidence": breaker_output.confidence, "absent": False}
             )
             if self.streaming_manager:
-                asyncio.create_task(self.streaming_manager.emit_event(
-                    request_id=passport.request_id,
-                    event=StreamEvent(
-                        event=EventType.BREAKER_PASSED,
-                        data={"confidence": breaker_output.confidence}
-                    )
-                ))
+                safe_create_task_broadcast(
+                    self.streaming_manager.emit_event(
+                        request_id=passport.request_id,
+                        event=StreamEvent(
+                            event=EventType.BREAKER_PASSED,
+                            data={"confidence": breaker_output.confidence}
+                        )
+                    ),
+                    name="breaker-passed-broadcast",
+                )
 
         return should_continue, breaker_output
 
@@ -208,15 +260,18 @@ class DecisionEngine:
         else:
             # Default: PARALLEL
             res = await self._execute_parallel(query, gateway, strategy, pool, passport, history)
-        
+
         if self.streaming_manager:
-            asyncio.create_task(self.streaming_manager.emit_event(
-                request_id=passport.request_id,
-                event=StreamEvent(
-                    event=EventType.GENERATION_COMPLETED,
-                    data={"strategy": self.strategy.value}
-                )
-            ))
+            safe_create_task_broadcast(
+                self.streaming_manager.emit_event(
+                    request_id=passport.request_id,
+                    event=StreamEvent(
+                        event=EventType.GENERATION_COMPLETED,
+                        data={"strategy": self.strategy.value}
+                    )
+                ),
+                name="generation-completed-broadcast",
+            )
         return res
 
     async def execute_judge_synthesis(
@@ -286,13 +341,16 @@ class DecisionEngine:
         )
 
         if self.streaming_manager:
-            asyncio.create_task(self.streaming_manager.emit_event(
-                request_id=passport.request_id,
-                event=StreamEvent(
-                    event=EventType.JUDGE_SYNTHESIZED,
-                    data={"score": judge_output.validation_score, "confidence": judge_output.overall_confidence}
-                )
-            ))
+            safe_create_task_broadcast(
+                self.streaming_manager.emit_event(
+                    request_id=passport.request_id,
+                    event=StreamEvent(
+                        event=EventType.JUDGE_SYNTHESIZED,
+                        data={"score": judge_output.validation_score, "confidence": judge_output.overall_confidence}
+                    )
+                ),
+                name="judge-synthesized-broadcast",
+            )
 
         return judge_output
 
@@ -331,12 +389,14 @@ class DecisionEngine:
         """Assemble Breaker prompt, call gateway, parse into AgentOutput."""
         passport.update_stage("breaker")
         system_prompt = assemble_breaker_prompt(strategy.mode.value)
-        raw = await gateway.execute_with_fallback(
+        raw = await self._dispatch_provider_call(
             prompt=query,
             system_prompt=system_prompt,
             role="breaker",
+            gateway=gateway,
             strategy=strategy,
             pool=pool,
+            passport=passport,
             history=history,
         )
         return safe_parse_agent_output(raw, "Breaker", parse_and_repair, AgentOutput)
@@ -352,12 +412,14 @@ class DecisionEngine:
     ) -> AgentOutput:
         """Assemble Logician prompt, call gateway, parse into AgentOutput."""
         system_prompt = assemble_logician_prompt(strategy.mode.value)
-        raw = await gateway.execute_with_fallback(
+        raw = await self._dispatch_provider_call(
             prompt=query,
             system_prompt=system_prompt,
             role="generation",
+            gateway=gateway,
             strategy=strategy,
             pool=pool,
+            passport=passport,
             history=history,
         )
         return safe_parse_agent_output(raw, "Logician", parse_and_repair, AgentOutput)
@@ -373,15 +435,58 @@ class DecisionEngine:
     ) -> AgentOutput:
         """Assemble Creative prompt, call gateway, parse into AgentOutput."""
         system_prompt = assemble_creative_prompt(strategy.mode.value)
-        raw = await gateway.execute_with_fallback(
+        raw = await self._dispatch_provider_call(
             prompt=query,
             system_prompt=system_prompt,
             role="generation",
+            gateway=gateway,
+            strategy=strategy,
+            pool=pool,
+            passport=passport,
+            history=history,
+        )
+        return safe_parse_agent_output(raw, "Creative", parse_and_repair, AgentOutput)
+
+    async def _dispatch_provider_call(
+        self,
+        *,
+        prompt: str,
+        system_prompt: str,
+        role: str,
+        gateway: AsyncAPIGateway,
+        strategy: ProviderStrategy,
+        pool: ProviderPool,
+        passport: ExecutionPassport,
+        history: list[dict[str, str]] | None,
+    ) -> str:
+        """HIGH-009 — route provider call through RuntimeEngine when configured.
+
+        When ``runtime_engine`` is supplied, every provider call is wrapped in
+        ``RuntimeEngine.execute_with_contracts`` so that security validation,
+        streaming events, rate limiting, and per-agent metrics are enforced.
+        When no runtime engine is provided we fall back to the historical
+        direct ``gateway.execute_with_fallback`` path so callers that do not
+        opt in still function.
+        """
+        if self.runtime_engine is not None:
+            return await self.runtime_engine.execute_with_contracts(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                role=role,
+                passport=passport,
+                gateway=gateway,
+                strategy=strategy,
+                pool=pool,
+                history=history,
+            )
+        return await gateway.execute_with_fallback(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            role=role,
             strategy=strategy,
             pool=pool,
             history=history,
         )
-        return safe_parse_agent_output(raw, "Creative", parse_and_repair, AgentOutput)
 
     # ── Private: Execution Strategies ────────────────────────────────
 

@@ -174,7 +174,7 @@ describe('Sidebar', () => {
       />
     );
 
-    fireEvent.click(screen.getAllByLabelText('Delete conversation')[0]);
+    fireEvent.click(screen.getAllByLabelText(/Delete/)[0]);
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     expect(onDelete).not.toHaveBeenCalled();
 
@@ -195,7 +195,7 @@ describe('Sidebar', () => {
       />
     );
 
-    fireEvent.click(screen.getAllByLabelText('Delete conversation')[0]);
+    fireEvent.click(screen.getAllByLabelText(/Delete/)[0]);
     fireEvent.click(screen.getByText('Cancel'));
 
     expect(onDelete).not.toHaveBeenCalled();

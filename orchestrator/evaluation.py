@@ -109,7 +109,6 @@ Output strictly in raw JSON following the aetherisOutput schema layout:
         strategy=strategy,
         pool=pool,
         history=history,
-        user_controlled=False,
     )
 
     return parse_and_repair(raw_judge_output, aetherisOutput)

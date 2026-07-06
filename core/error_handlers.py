@@ -35,17 +35,13 @@ class AETHERISException(Exception):
         super().__init__(message)
 
 
-class SecurityValidationError(AETHERISException):
-    """Raised when security validation fails (injection, length, characters)."""
+# HIGH-002 audit fix: `SecurityValidationError` is now defined exclusively in
+# `core.security` (the canonical owner).  Importing it from this module
+# would create two distinct classes which were ``isinstance``-incompatible.
+# A backward-compatible alias is preserved so existing callers that import
+# from ``core.error_handlers`` continue to work.
 
-    def __init__(self, violations: list, component: str = "security"):
-        self.violations = violations
-        messages = [v.description if hasattr(v, "description") else str(v) for v in violations]
-        super().__init__(
-            f"Security validation failed: {'; '.join(messages)}",
-            component=component,
-            details={"violations": [str(v) for v in violations]},
-        )
+from core.security import SecurityValidationError  # noqa: E402,F401
 
 
 class PipelineError(AETHERISException):
@@ -89,8 +85,8 @@ def log_and_record_error(
 ) -> None:
     """Log an error and record it in the ExecutionPassport.
 
-    This is the shared pattern used across decisions.py, pipeline_scheduler.py,
-    and other components for consistent error recording.
+    This is the shared pattern used across decisions.py and other
+    components for consistent error recording.
 
     Parameters
     ----------
@@ -394,7 +390,7 @@ async def execute_with_passport_logging(
     """Execute a coroutine, recording errors in passport on failure.
 
     This eliminates the repeated try/passport.record_error/logger.error pattern
-    across decisions.py and pipeline_scheduler.py.
+    shared across decisions.py and other engine modules.
 
     Parameters
     ----------

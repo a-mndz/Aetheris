@@ -7,6 +7,7 @@ import { fetchProviderStatus } from './api/client';
 // Mock API client
 vi.mock('./api/client', () => ({
   fetchProviderStatus: vi.fn(),
+  setConnectionLostCallback: vi.fn(),
 }));
 
 // Mock child components to isolate App logic

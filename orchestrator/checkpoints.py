@@ -74,15 +74,24 @@ class CheckpointManager:
 
     MAX_CHECKPOINTS_PER_REQUEST = 10
 
-    def __init__(self, storage_backend: str = "memory", retention_days: int = 7):
+    def __init__(
+        self,
+        storage_backend: str = "memory",
+        retention_days: int = 7,
+        db_session_factory: Any = None,
+    ):
         """Initialize with storage backend: 'memory', 'filesystem', or 'database'.
 
         Args:
             storage_backend: 'memory' (default), 'filesystem' (JSON files), or 'database' (PostgreSQL)
             retention_days: Checkpoint retention period (1-30 days, default 7)
+            db_session_factory: Callable returning an ``AsyncSession`` (required when
+                ``storage_backend`` is ``database``).  Used by the CRIT-003 backend
+                switch to keep checkpoints across server restarts.
         """
         validate_enum(storage_backend, ("memory", "filesystem", "database"), "storage_backend")
         self.storage_backend = storage_backend
+        self.db_session_factory = db_session_factory
         # Clamp retention_days to range [1/24, 30] (1 hour minimum, 30 days maximum)
         self.retention_days = max(
             self.MIN_RETENTION_HOURS / 24,
@@ -90,6 +99,11 @@ class CheckpointManager:
         )
         # In-memory storage: request_id -> list of checkpoints
         self.checkpoints: dict[str, list[Checkpoint]] = {}
+        if storage_backend == "database" and db_session_factory is None:
+            logger.warning(
+                "CheckpointManager created with database backend but no session factory; "
+                "database operations will raise RuntimeError until a factory is wired in."
+            )
         logger.info(
             "Initialized CheckpointManager with backend=%s, retention_days=%.2f",
             storage_backend,
@@ -150,7 +164,7 @@ class CheckpointManager:
         )
 
         # Simulate save with timeout (in-memory store is fast, but we still enforce timeout)
-        result = await with_timeout(
+        await with_timeout(
             self._store_checkpoint(checkpoint),
             timeout_sec=self.SAVE_TIMEOUT_SEC,
             operation_name="Checkpoint save",
@@ -237,14 +251,12 @@ class CheckpointManager:
     # Private helper methods
 
     async def _store_checkpoint(self, checkpoint: Checkpoint) -> None:
-        """Store checkpoint in backend (memory for Phase 1)."""
+        """Store checkpoint in the configured backend."""
         if self.storage_backend == "memory":
             request_id = checkpoint.request_id
             if request_id not in self.checkpoints:
                 self.checkpoints[request_id] = []
-            # Enforce max checkpoints per request
             if len(self.checkpoints[request_id]) >= self.MAX_CHECKPOINTS_PER_REQUEST:
-                # Remove oldest checkpoint
                 oldest = min(self.checkpoints[request_id], key=lambda cp: cp.timestamp)
                 self.checkpoints[request_id].remove(oldest)
                 logger.debug(
@@ -253,24 +265,27 @@ class CheckpointManager:
                     request_id,
                 )
             self.checkpoints[request_id].append(checkpoint)
-        else:
-            # For filesystem/database backends, raise NotImplementedError for now
-            raise NotImplementedError(
-                f"Storage backend '{self.storage_backend}' not yet implemented"
-            )
+            return
+
+        if self.storage_backend == "database":
+            await self._store_checkpoint_db(checkpoint)
+            return
+
+        raise NotImplementedError(f"Storage backend '{self.storage_backend}' not yet implemented")
 
     async def _retrieve_checkpoint(self, checkpoint_id: str) -> Optional[Checkpoint]:
-        """Retrieve checkpoint by ID from backend."""
+        """Retrieve checkpoint by ID from the configured backend."""
         if self.storage_backend == "memory":
             for request_checkpoints in self.checkpoints.values():
                 for checkpoint in request_checkpoints:
                     if checkpoint.checkpoint_id == checkpoint_id:
                         return checkpoint
             return None
-        else:
-            raise NotImplementedError(
-                f"Storage backend '{self.storage_backend}' not yet implemented"
-            )
+
+        if self.storage_backend == "database":
+            return await self._retrieve_checkpoint_db(checkpoint_id)
+
+        raise NotImplementedError(f"Storage backend '{self.storage_backend}' not yet implemented")
 
     async def _list_checkpoints_impl(
         self,
@@ -287,38 +302,143 @@ class CheckpointManager:
                     if session_id is not None and checkpoint.session_id != session_id:
                         continue
                     results.append(checkpoint)
-            # Sort by timestamp descending
             results.sort(key=lambda cp: cp.timestamp, reverse=True)
             return results
-        else:
-            raise NotImplementedError(
-                f"Storage backend '{self.storage_backend}' not yet implemented"
-            )
+
+        if self.storage_backend == "database":
+            return await self._list_checkpoints_db(request_id, session_id)
+
+        raise NotImplementedError(f"Storage backend '{self.storage_backend}' not yet implemented")
 
     async def _expire_checkpoints_impl(self) -> int:
-        """Remove expired checkpoints from backend."""
+        """Remove expired checkpoints from the configured backend."""
         if self.storage_backend == "memory":
             now = utc_now()
             expired_count = 0
             expired_request_ids = []
             for request_id, checkpoints in self.checkpoints.items():
-                # Find expired checkpoints
-                expired_checkpoints = [
-                    cp for cp in checkpoints if cp.expires_at < now
-                ]
+                expired_checkpoints = [cp for cp in checkpoints if cp.expires_at < now]
                 for cp in expired_checkpoints:
                     checkpoints.remove(cp)
                     expired_count += 1
                 if not checkpoints:
                     expired_request_ids.append(request_id)
-            # Clean up empty request entries
             for request_id in expired_request_ids:
                 del self.checkpoints[request_id]
             return expired_count
-        else:
-            raise NotImplementedError(
-                f"Storage backend '{self.storage_backend}' not yet implemented"
+
+        if self.storage_backend == "database":
+            return await self._expire_checkpoints_db()
+
+        raise NotImplementedError(f"Storage backend '{self.storage_backend}' not yet implemented")
+
+    # ── Database backend helpers (CRIT-003) ────────────────────────────
+
+    def _require_db_factory(self) -> Any:
+        if self.db_session_factory is None:
+            raise RuntimeError(
+                "CheckpointManager(database) requires db_session_factory to be provided."
             )
+        return self.db_session_factory
+
+    @staticmethod
+    def _record_to_checkpoint(record: Any) -> Checkpoint:
+        payload = record.payload or {}
+        return Checkpoint(
+            checkpoint_id=record.checkpoint_id,
+            request_id=record.request_id,
+            session_id=payload.get("session_id"),
+            stage=record.stage,
+            agent_outputs=payload.get("agent_outputs", {}),
+            partial_results=payload.get("partial_results", {}),
+            timestamp=record.timestamp,
+            expires_at=record.expires_at or record.timestamp,
+        )
+
+    async def _store_checkpoint_db(self, checkpoint: Checkpoint) -> None:
+        from sqlalchemy import select
+
+        from core.models import CheckpointRecord
+
+        factory = self._require_db_factory()
+        async with factory() as session:
+            existing_q = await session.execute(
+                select(CheckpointRecord).where(
+                    CheckpointRecord.checkpoint_id == checkpoint.checkpoint_id
+                )
+            )
+            existing = existing_q.scalar_one_or_none()
+            payload = {
+                "session_id": checkpoint.session_id,
+                "agent_outputs": checkpoint.agent_outputs,
+                "partial_results": checkpoint.partial_results,
+            }
+            if existing is None:
+                record = CheckpointRecord(
+                    checkpoint_id=checkpoint.checkpoint_id,
+                    request_id=checkpoint.request_id,
+                    stage=checkpoint.stage,
+                    payload=payload,
+                    timestamp=checkpoint.timestamp,
+                    expires_at=checkpoint.expires_at,
+                )
+                session.add(record)
+            else:
+                existing.request_id = checkpoint.request_id
+                existing.stage = checkpoint.stage
+                existing.payload = payload
+                existing.timestamp = checkpoint.timestamp
+                existing.expires_at = checkpoint.expires_at
+            await session.commit()
+
+    async def _retrieve_checkpoint_db(self, checkpoint_id: str) -> Optional[Checkpoint]:
+        from sqlalchemy import select
+
+        from core.models import CheckpointRecord
+
+        factory = self._require_db_factory()
+        async with factory() as session:
+            result = await session.execute(
+                select(CheckpointRecord).where(CheckpointRecord.checkpoint_id == checkpoint_id)
+            )
+            record = result.scalar_one_or_none()
+            if record is None:
+                return None
+            return self._record_to_checkpoint(record)
+
+    async def _list_checkpoints_db(
+        self,
+        request_id: Optional[str],
+        session_id: Optional[str],
+    ) -> list[Checkpoint]:
+        from sqlalchemy import select
+
+        from core.models import CheckpointRecord
+
+        factory = self._require_db_factory()
+        async with factory() as session:
+            stmt = select(CheckpointRecord)
+            if request_id is not None:
+                stmt = stmt.where(CheckpointRecord.request_id == request_id)
+            stmt = stmt.order_by(CheckpointRecord.timestamp.desc())
+            result = await session.execute(stmt)
+            records = list(result.scalars())
+            checkpoints = [self._record_to_checkpoint(r) for r in records]
+            if session_id is not None:
+                checkpoints = [cp for cp in checkpoints if cp.session_id == session_id]
+            return checkpoints
+
+    async def _expire_checkpoints_db(self) -> int:
+        from sqlalchemy import delete
+
+        from core.models import CheckpointRecord
+
+        factory = self._require_db_factory()
+        async with factory() as session:
+            stmt = delete(CheckpointRecord).where(CheckpointRecord.expires_at < utc_now())
+            result = await session.execute(stmt)
+            await session.commit()
+            return int(result.rowcount or 0)
 
     def _truncate_agent_outputs(self, agent_outputs: dict[str, Any]) -> dict[str, Any]:
         """Truncate agent outputs exceeding 5 MB limit."""

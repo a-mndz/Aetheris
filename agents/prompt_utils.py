@@ -251,6 +251,28 @@ def init_conversation_context(
         return None, None
 
 
+def record_user_query(
+    conversation_director: Any,
+    session_id: str | None,
+    user_query: str | None,
+    logger_instance: Any = None,
+) -> None:
+    """Append the user query to conversation history (MED-015 fix).
+
+    Idempotent — calling with the same query twice still records both turns
+    because the caller's intent is unambiguous.  Failures are logged at
+    ``debug`` level so a transient director glitch never aborts the pipeline.
+    """
+    log = logger_instance or logger
+    if conversation_director is None or not session_id or not user_query:
+        return
+    try:
+        token_count = len(user_query) // 4
+        conversation_director.add_turn(session_id, "user", user_query, token_count)
+    except Exception as exc:
+        log.debug("Failed to record user query in session %s: %s", session_id, exc)
+
+
 def complete_conversation_session(
     conversation_director: Any,
     session_id: str | None,

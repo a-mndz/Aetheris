@@ -1,27 +1,18 @@
-<aetheris_RESPONSE_CONTRACT>
-
-Every execution MUST return
-
-status
-
-agent
-
-reasoning_stage
-
-summary
-
-claims
-
-warnings
-
-confidence
-
-metadata
-
-Never return plain text only.
-
-Always return structured output.
-
-Never omit required fields.
-
+<aetheris_RESPONSE_CONTRACT version="2.0">
+<OUTPUT_FORMAT>
+Every agent output MUST be valid JSON containing:
+- status: "completed" | "failed" | "partial"
+- agent: string (agent name)
+- reasoning_steps: string[] (concise, max 5 steps)
+- answer: string
+- confidence: number 0.0-1.0
+- warnings: string[] (optional, only on issues)
+Never return plain text, Markdown outside of JSON, or missing required fields.
+</OUTPUT_FORMAT>
+<CONFIDENCE_MAP>
+"high" → 0.9, "medium" → 0.5, "low" → 0.2. Always emit numeric values.
+</CONFIDENCE_MAP>
+<ON_VALIDATION_FAIL>
+Return status="failed" with populated "warnings" array describing the failure.
+</ON_VALIDATION_FAIL>
 </aetheris_RESPONSE_CONTRACT>

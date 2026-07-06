@@ -62,6 +62,10 @@ class ConversationSession:
     total_tokens: int = 0
     created_at: datetime = field(default_factory=utc_now)
     expires_at: Optional[datetime] = None
+    # HIGH-015 audit fix: owner_email prevents cross-user session access.
+    # ``None`` means the session predates user scoping and is therefore
+    # accessible to any authenticated caller (legacy / repair window).
+    owner_email: Optional[str] = None
 
 
 class InvalidConversationTransitionError(Exception):
@@ -79,6 +83,11 @@ class ConversationDirector:
     - Truncation triggered at 80% of context window
     - Preserve 5 most recent turns during truncation
     - 24-hour expiration for completed/failed sessions
+
+    HIGH-015: each session carries an optional ``owner_email``.  Access is
+    approved via :meth:`verify_access` which is called from the API layer
+    on every session-scoped endpoint.  Ownerless legacy sessions permit
+    any authenticated user so existing data is not orphaned during rollout.
     """
 
     MAX_HISTORY_SIZE: int = 100
@@ -91,12 +100,18 @@ class ConversationDirector:
         """Initialize the ConversationDirector with in-memory session storage."""
         self._sessions: dict[str, ConversationSession] = {}
 
-    def create_session(self, session_id: str) -> ConversationSession:
+    def create_session(
+        self,
+        session_id: str,
+        owner_email: Optional[str] = None,
+    ) -> ConversationSession:
         """
         Initialize a new conversation session.
 
         Args:
             session_id: Unique identifier for the session.
+            owner_email: Optional authenticated user identifier.  When set,
+                only that user may access the session (HIGH-015).
 
         Returns:
             The newly created ConversationSession.
@@ -116,12 +131,33 @@ class ConversationDirector:
             total_tokens=0,
             created_at=utc_now(),
             expires_at=None,
+            owner_email=owner_email,
         )
 
         self._sessions[session_id] = session
-        logger.info("Created conversation session: %s", session_id, extra={"session_id": session_id, "stage": "conversation"})
-
+        logger.info(
+            "Created conversation session: %s owner=%s",
+            session_id,
+            owner_email or "<legacy>",
+            extra={"session_id": session_id, "stage": "conversation"},
+        )
         return session
+
+    def verify_access(self, session_id: str, user_email: Optional[str]) -> bool:
+        """HIGH-015: return True iff the requesting user owns this session.
+
+        Ownerless sessions (``owner_email is None``) accept any authenticated
+        caller to honour legacy data.  Owning callers receive True; all other
+        identities receive False.
+        """
+        if user_email is None:
+            return False
+        session = self._sessions.get(session_id)
+        if session is None:
+            return False
+        if session.owner_email is None:
+            return True
+        return session.owner_email == user_email
 
     def add_turn(
         self,

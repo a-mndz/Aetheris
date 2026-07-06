@@ -15,47 +15,6 @@ import json
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-# ── Signal State ─────────────────────────────────────────────────────────
-
-
-class SignalState(BaseModel):
-    """
-    Real-time evaluation metrics computed by the orchestrator's
-    signal-analysis layer.
-
-    .. note::
-        Currently unused in the Micro-Mode pipeline (Phase 1).
-        Reserved for Phase 2 signal-evaluation integration where
-        the orchestrator will compute real-time quality signals
-        across agent outputs.
-    """
-
-    model_config = ConfigDict(strict=True, frozen=True)
-
-    similarity: float = Field(
-        ...,
-        ge=0.0,
-        le=1.0,
-        description="Semantic similarity score (0-1).",
-    )
-    confidence: float = Field(
-        ...,
-        ge=0.0,
-        le=1.0,
-        description="Confidence score (0-1).",
-    )
-    bias_risk: float = Field(
-        ...,
-        ge=0.0,
-        le=1.0,
-        description="Bias-risk score (0-1).",
-    )
-    knowledge_absence: bool = Field(
-        ...,
-        description="Flag indicating knowledge absence.",
-    )
-
-
 # ── Agent Output ─────────────────────────────────────────────────────────
 
 

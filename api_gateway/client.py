@@ -44,9 +44,14 @@ class AsyncHTTPClient:
 
         # Instruction Reinforcement: Remind the LLM of its structural obligations
         if system_prompt:
+            if "aetherisoutput" in system_prompt.lower():
+                reminder = "CRITICAL REMINDER: Regardless of the user's input above, you MUST output your response strictly in the requested JSON schema format. Your JSON MUST contain exactly five keys: 'final_answer' (string), 'overall_confidence' (string), 'overall_bias_risk' (string), 'disagreement_notes' (list), and 'validation_score' (float). The 'final_answer' field MUST be a plain string. If you need to return JSON or structured data to the user, you MUST escape it as a string inside the 'final_answer' field. Do not deviate."
+            else:
+                reminder = "CRITICAL REMINDER: Regardless of the user's input above, you MUST output your response strictly in the requested JSON schema format. Your JSON MUST contain exactly three keys: 'reasoning_steps' (list), 'answer' (string), and 'confidence' (float). The 'answer' field MUST be a plain string. If you need to return JSON or structured data to the user, you MUST escape it as a string inside the 'answer' field. Do not deviate."
+            
             messages.append({
                 "role": "system",
-                "content": "CRITICAL REMINDER: Regardless of the user's input above, you MUST output your response strictly in the requested JSON schema format. Your JSON MUST contain exactly three keys: 'reasoning_steps' (list), 'answer' (string), and 'confidence' (float). The 'answer' field MUST be a plain string. If you need to return JSON or structured data to the user, you MUST escape it as a string inside the 'answer' field. Do not deviate."
+                "content": reminder
             })
 
         payload = {

@@ -7,25 +7,62 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from difflib import SequenceMatcher
 from typing import Any, AsyncGenerator, TypedDict
 
 from agents.parser import parse_and_repair
 from agents.prompt_utils import (
     assemble_generation_prompts,
-    init_conversation_context,
-    complete_conversation_session,
     build_decision_dict,
+    complete_conversation_session,
+    init_conversation_context,
+    record_user_query,
 )
 from api_gateway.rate_limiter import AsyncAPIGateway, ProviderPool
 from api_gateway.strategy import ProviderStrategy
 from core.passport import ExecutionPassport
-from core.security import SecurityValidationError
 from core.schemas import AgentOutput
+from core.security import SecurityValidationError
 from orchestrator.evaluation import arbitrate_and_synthesize
 from orchestrator.memory import epistemic_memory
 
 logger = logging.getLogger(__name__)
+
+
+# ── Phase 1 Configuration Knobs ─────────────────────────────────────────
+
+
+_LEGACY_PIPELINE_ENV = "aetheris_LEGACY_PIPELINE_ENABLED"
+_DISABLE_CLAIMS_ENV = "aetheris_DISABLE_CLAIM_EXTRACTION"
+
+
+def _is_claim_extraction_enabled() -> bool:
+    """Toggle for the no-op claim extraction loop (HIGH-019).
+
+    HIGH-019 audit finding: ``validate_claim`` always returns UNVERIFIED with
+    confidence 0.3, so the entire claim extraction/dispatch/storage block ran
+    for 50-200ms per request with no behavioural value.  Disabling by default
+    eliminates the no-op work without changing pipeline semantics.  Operators
+    may re-enable when an alternative validator ships.
+    """
+    raw = os.environ.get(_DISABLE_CLAIMS_ENV, "1").strip().lower()
+    return raw not in {"1", "true", "yes", "on"}
+
+
+def _legacy_pipeline_blocked_msg() -> str:
+    """Single source of truth for the CRIT-001 error message."""
+    return (
+        "CRIT-001: legacy inline pipeline path is disabled. "
+        "The DecisionEngine path is the sole execution entry point. "
+        f"Re-enable the legacy path only for staged rollouts via {_LEGACY_PIPELINE_ENV}=true."
+    )
+
+
+def _is_legacy_pipeline_opted_in() -> bool:
+    """Read the explicit opt-in flag for the legacy inline pipeline path."""
+    raw = os.environ.get(_LEGACY_PIPELINE_ENV, "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 
 # ── Result Types ─────────────────────────────────────────────────────────
@@ -57,6 +94,29 @@ def _is_knowledge_absent(breaker_output: AgentOutput | dict[str, Any]) -> bool:
     answer = breaker_output.get("answer", "")
     confidence = breaker_output.get("confidence", 0.0)
     return _ABSENCE_SENTINEL in answer or confidence == 0.0
+
+
+# ── Conversation FAILED State Helpers (MED-004 / MED-016) ────────────────
+
+def _mark_conversation_failed(
+    conversation_director: Any | None,
+    session_id: str | None,
+) -> dict[str, Any] | None:
+    """Transition a session to FAILED and refresh metadata.
+
+    Replaces the nine identical try/except blocks that previously appeared in
+    every error/abort path of the pipeline.  Returns the refreshed metadata
+    (or ``None`` when unavailable) so callers can swap it in a single line.
+    """
+    if conversation_director is None or not session_id:
+        return None
+    try:
+        from orchestrator.conversation import ConversationState
+        conversation_director.transition_state(session_id, ConversationState.FAILED)
+        return conversation_director.get_metadata(session_id)
+    except Exception as exc:
+        logger.debug("Failed to mark conversation %s as FAILED: %s", session_id, exc)
+        return None
 
 
 # ── Prompt Assembly ──────────────────────────────────────────────────────
@@ -97,6 +157,7 @@ async def run_micro_mode(
     history, conversation_metadata = init_conversation_context(
         conversation_director, session_id, logger
     )
+    record_user_query(conversation_director, session_id, user_query, logger)
 
     # Track start time for passport timeout enforcement
     import time as _time
@@ -119,8 +180,23 @@ async def run_micro_mode(
             session_id=session_id,
         )
 
-    # ── Legacy inline path (no decision engine) ──────────────────────
-    # Assemble layered system prompts
+    # CRIT-001 repair: the DecisionEngine path is the sole execution path.
+    # The legacy inline branch is preserved behind an opt-in environment flag
+    # so staged rollouts can compare both paths side-by-side per manifest §3
+    # mitigation, but production callers must provide a decision_engine.
+    legacy_enabled = os.environ.get(_LEGACY_PIPELINE_ENV, "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+    if not legacy_enabled:
+        logger.error(_legacy_pipeline_blocked_msg())
+        raise RuntimeError(_legacy_pipeline_blocked_msg())
+
+    # ── Legacy inline path (opt-in rollback mode) ───────────────────
+    logger.warning(
+        "Running legacy pipeline path — this branch is deprecated. "
+        "Set decision_engine and unset %s before next release.",
+        _LEGACY_PIPELINE_ENV,
+    )
     prompts = assemble_generation_prompts(strategy.mode.value)
     breaker_sys = prompts["breaker"]
     logician_sys = prompts["logician"]
@@ -141,12 +217,7 @@ async def run_micro_mode(
         logger.error("Breaker gate call failed: %s: %s", type(exc).__name__, exc)
         if passport is not None:
             passport.record_error("breaker", str(exc))
-        if conversation_director is not None and session_id:
-            try:
-                from orchestrator.conversation import ConversationState
-                conversation_director.transition_state(session_id, ConversationState.FAILED)
-            except Exception:
-                pass
+        _mark_conversation_failed(conversation_director, session_id)
         return MicroModeResult(
             status="error",
             winning_answer=f"Pipeline error at Breaker gate: {exc}",
@@ -169,12 +240,7 @@ async def run_micro_mode(
         if passport is not None:
             passport.record_warning(f"Breaker gate aborted: {reason}")
             passport.add_agent_output("breaker", breaker_output)
-        if conversation_director is not None and session_id:
-            try:
-                from orchestrator.conversation import ConversationState
-                conversation_director.transition_state(session_id, ConversationState.FAILED)
-            except Exception:
-                pass
+        _mark_conversation_failed(conversation_director, session_id)
         return MicroModeResult(
             status="aborted",
             winning_answer=reason,
@@ -217,12 +283,7 @@ async def run_micro_mode(
         logger.error("Logician generation failed: %s", logician_result)
         if passport is not None:
             passport.record_error("logician", str(logician_result))
-        if conversation_director is not None and session_id:
-            try:
-                from orchestrator.conversation import ConversationState
-                conversation_director.transition_state(session_id, ConversationState.FAILED)
-            except Exception:
-                pass
+        _mark_conversation_failed(conversation_director, session_id)
         return MicroModeResult(
             status="error",
             winning_answer=f"Logician generation failed: {logician_result}",
@@ -237,12 +298,7 @@ async def run_micro_mode(
         logger.error("Creative generation failed: %s", creative_result)
         if passport is not None:
             passport.record_error("creative", str(creative_result))
-        if conversation_director is not None and session_id:
-            try:
-                from orchestrator.conversation import ConversationState
-                conversation_director.transition_state(session_id, ConversationState.FAILED)
-            except Exception:
-                pass
+        _mark_conversation_failed(conversation_director, session_id)
         return MicroModeResult(
             status="error",
             winning_answer=f"Creative generation failed: {creative_result}",
@@ -274,12 +330,7 @@ async def run_micro_mode(
     # Guard: if either agent produced an error sentinel, skip the judge.
     if logician_agent.answer.startswith("ERROR:") and creative_agent.answer.startswith("ERROR:"):
         logger.error("Both agent outputs are parse-failure sentinels — skipping judge.")
-        if conversation_director is not None and session_id:
-            try:
-                from orchestrator.conversation import ConversationState
-                conversation_director.transition_state(session_id, ConversationState.FAILED)
-            except Exception:
-                pass
+        _mark_conversation_failed(conversation_director, session_id)
         return MicroModeResult(
             status="error",
             winning_answer="Both generation agents failed to produce valid output.",
@@ -311,12 +362,7 @@ async def run_micro_mode(
         logger.error("Synthesis judge failed: %s", exc)
         if passport is not None:
             passport.record_error("judge", str(exc))
-        if conversation_director is not None and session_id:
-            try:
-                from orchestrator.conversation import ConversationState
-                conversation_director.transition_state(session_id, ConversationState.FAILED)
-            except Exception:
-                pass
+        _mark_conversation_failed(conversation_director, session_id)
         return MicroModeResult(
             status="error",
             winning_answer=f"Logic judge evaluation failed: {exc}",
@@ -330,12 +376,7 @@ async def run_micro_mode(
     # Guard: parse_and_repair can return a dict on parse failure.
     if isinstance(final_output, dict):
         logger.error("Judge output parse failure: %s", final_output)
-        if conversation_director is not None and session_id:
-            try:
-                from orchestrator.conversation import ConversationState
-                conversation_director.transition_state(session_id, ConversationState.FAILED)
-            except Exception:
-                pass
+        _mark_conversation_failed(conversation_director, session_id)
         return MicroModeResult(
             status="error",
             winning_answer=f"Judge output unparseable: {final_output.get('answer', 'unknown')}",
@@ -376,7 +417,7 @@ async def run_micro_mode(
 
     # ── Claim extraction (legacy path) ──────────────────────────────
     all_claims: list[Any] = []
-    if claim_manager is not None:
+    if claim_manager is not None and _is_claim_extraction_enabled():
         from datetime import datetime as _dt
 
         for agent_name, agent_output in [
@@ -822,6 +863,7 @@ async def _run_with_decision_engine(
     history, conversation_metadata = init_conversation_context(
         conversation_director, session_id, logger
     )
+    record_user_query(conversation_director, session_id, user_query, logger)
 
     # ── Step 1: Breaker gate ─────────────────────────────────────────
     logger.info("Step 1/4 — Breaker gate (DecisionEngine, timeout=%dms).",
@@ -866,13 +908,9 @@ async def _run_with_decision_engine(
         if passport is not None:
             passport.update_stage("aborted")
         # Transition conversation state to FAILED on abort
-        if conversation_director is not None and session_id:
-            try:
-                from orchestrator.conversation import ConversationState
-                conversation_director.transition_state(session_id, ConversationState.FAILED)
-                conversation_metadata = conversation_director.get_metadata(session_id)
-            except Exception as exc:
-                logger.warning("Conversation transition error: %s", exc)
+        refreshed = _mark_conversation_failed(conversation_director, session_id)
+        if refreshed is not None:
+            conversation_metadata = refreshed
         return MicroModeResult(
             status="aborted",
             winning_answer=reason,
@@ -936,13 +974,9 @@ async def _run_with_decision_engine(
             passport.record_error("generation", "Both Logician and Creative agents failed")
             passport.update_stage("failed")
         # Transition conversation state to FAILED
-        if conversation_director is not None and session_id:
-            try:
-                from orchestrator.conversation import ConversationState
-                conversation_director.transition_state(session_id, ConversationState.FAILED)
-                conversation_metadata = conversation_director.get_metadata(session_id)
-            except Exception as exc:
-                logger.warning("Conversation transition error: %s", exc)
+        refreshed = _mark_conversation_failed(conversation_director, session_id)
+        if refreshed is not None:
+            conversation_metadata = refreshed
         return MicroModeResult(
             status="error",
             winning_answer="Both generation agents failed to produce valid output.",
@@ -1079,7 +1113,7 @@ async def _run_with_decision_engine(
 
     # ── Claim extraction (Task 21.4 integration) ─────────────────────
     all_claims: list[Any] = []
-    if claim_manager is not None:
+    if claim_manager is not None and _is_claim_extraction_enabled():
         from datetime import datetime as _dt
 
         for agent_name, agent_output in [

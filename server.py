@@ -16,38 +16,43 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Depends, status
+# CRIT-007: load provider API keys from the OS secret store BEFORE
+# anything that transitively imports ``core.config``.  Idempotent —
+# safe to call even when ``main.py`` has already done so.
+import secrets_bootstrap  # noqa: F401  (side-effecting import)
+
+from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import Field as PField
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_gateway import AsyncAPIGateway, ProviderPool, ProviderStrategy
-from api_gateway.rate_limiter import extract_provider_key
+from api_gateway.rate_limiter import (
+    HealthMetrics,
+    ProviderStatus,
+    extract_provider_key,
+)
 from core.config import get_settings
-from core.database import get_db, engine
+from core.database import engine, get_db
 from core.models import Base, User
 from core.security import (
     SecurityValidationError,
     create_access_token,
     get_current_user,
     hash_password,
+    require_role,
     verify_password,
 )
 from orchestrator import run_micro_mode, stream_micro_mode
-from orchestrator.aetheris_orchestrator import initialize_aetheris_components, create_request_passport
-from orchestrator.background_tasks import create_background_tasks, cancel_background_tasks
+from orchestrator.aetheris_orchestrator import create_request_passport, initialize_aetheris_components
+from orchestrator.background_tasks import cancel_background_tasks, create_background_tasks
 from orchestrator.conversation import ConversationState
 from orchestrator.pipelines import _build_frontend_payload
 from orchestrator.streaming import EventType, StreamEvent, StreamingManager
-from api_gateway.rate_limiter import (
-    extract_provider_key,
-    ProviderStatus,
-    CircuitBreakerState,
-    HealthMetrics,
-)
 from telemetry.observer import observer
 
 logger = logging.getLogger("aetheris.web")
@@ -62,6 +67,23 @@ _streaming_mgr: StreamingManager = StreamingManager()
 _aetheris: dict[str, Any] = {}
 _background_tasks: list[asyncio.Task] = []
 
+# HIGH-014 — fixed-window in-process limiter for /auth/* routes.
+_auth_rate_log: dict[str, list[float]] = {}
+_AUTH_RATE_WINDOW_SEC = 60.0
+
+
+def _enforce_auth_rate_limit(client_ip: str) -> bool:
+    """Return True if the IP is allowed to make another auth request."""
+    now = datetime.now(timezone.utc).timestamp()
+    settings = get_settings()
+    limit = max(1, int(settings.AUTH_RATE_LIMIT_PER_MINUTE))
+    history = _auth_rate_log.setdefault(client_ip, [])
+    history[:] = [t for t in history if now - t < _AUTH_RATE_WINDOW_SEC]
+    if len(history) >= limit:
+        return False
+    history.append(now)
+    return True
+
 
 def _bootstrap_pool(strategy: ProviderStrategy) -> ProviderPool:
     """Create a ProviderPool and register every model from the strategy."""
@@ -73,6 +95,22 @@ def _bootstrap_pool(strategy: ProviderStrategy) -> ProviderPool:
     for model, roles in model_roles.items():
         pool.register_provider(extract_provider_key(model), roles=sorted(roles))
     return pool
+
+
+def _resolve_cors_origins() -> list[str]:
+    """CRIT-004: derive explicit allowlist from CORS_ORIGINS env var."""
+    raw = get_settings().CORS_ORIGINS
+    origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
+    if any(o == "*" for o in origins):
+        raise RuntimeError(
+            "CRIT-004: CORS_ORIGINS cannot contain '*'.  Provide an explicit "
+            "allowlist of fully-qualified origins."
+        )
+    if not origins:
+        raise RuntimeError(
+            "CRIT-004: CORS_ORIGINS must contain at least one explicit origin."
+        )
+    return origins
 
 
 # ── Application Lifespan ────────────────────────────────────────────────
@@ -93,21 +131,15 @@ async def lifespan(app: FastAPI):
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
     except Exception as exc:
-        logger.warning("Database connection failed: %s. Attempting to start PostgreSQL server...", exc)
-        import subprocess
-        try:
-            pg_ctl_path = r"C:\Program Files\PostgreSQL\18\bin\pg_ctl.exe"
-            data_dir = r"C:\Program Files\PostgreSQL\18\data"
-            subprocess.run([pg_ctl_path, "start", "-D", data_dir], shell=True, check=False)
-            # Give the server a few seconds to initialize
-            await asyncio.sleep(4)
-            # Retry connection
-            async with engine.begin() as conn:
-                await conn.run_sync(Base.metadata.create_all)
-            logger.info("PostgreSQL started successfully and tables initialized.")
-        except Exception as retry_exc:
-            logger.error("Could not automatically start PostgreSQL server: %s", retry_exc)
-            raise exc
+        # HIGH-005 audit fix: removed the Windows-specific PostgreSQL auto-start
+        # branch.  Connection failures now surface immediately so operators
+        # configure their database out-of-band; the server no longer hides
+        # configuration errors behind a ``subprocess`` invocation.
+        logger.error("Database connection failed at startup: %s", exc)
+        raise RuntimeError(
+            "Database is unreachable.  Verify DATABASE_URL and that PostgreSQL "
+            "is running before launching the server.  See docs/deployment.md."
+        ) from exc
 
     global _background_tasks
 
@@ -145,11 +177,44 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="aetheris", version="1.0.0", lifespan=lifespan)
 
+
+@app.middleware("http")
+async def csrf_origin_check(request: Request, call_next):
+    """MED-019 lightweight CSRF origin check for state-changing requests.
+
+    Browsers carry the Origin header on cross-site requests; we verify that
+    incoming Origin / Referer hosts match the CORS allowlist before any
+    POST / PUT / DELETE handler runs.  Health probes and GETs are skipped.
+    """
+    if request.method.upper() not in {"POST", "PUT", "DELETE", "PATCH"}:
+        return await call_next(request)
+
+    try:
+        allowlist = _resolve_cors_origins()
+    except RuntimeError:
+        return await call_next(request)
+
+    origin = request.headers.get("origin") or request.headers.get("referer") or ""
+    if not origin:
+        return await call_next(request)
+
+    from urllib.parse import urlparse
+    parsed = urlparse(origin)
+    candidate = f"{parsed.scheme}://{parsed.netloc}"
+    if candidate not in allowlist:
+        return JSONResponse(
+            {"status": "error", "error": "CSRF check failed (origin not in allowlist)"},
+            status_code=403,
+        )
+    return await call_next(request)
+
+
+# CRIT-004 audit fix: CORS middleware uses an explicit allowlist (no wildcards).
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_resolve_cors_origins(),
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -170,9 +235,29 @@ class QueryRequest(BaseModel):
 
 # ── Auth Request Schemas ──────────────────────────────────────────────────
 
-class AuthRequest(BaseModel):
+class AuthLoginRequest(BaseModel):
     email: str
     password: str
+
+    @field_validator("email")
+    @classmethod
+    def _validate_email(cls, value: str) -> str:
+        normalised = value.strip().lower()
+        if "@" not in normalised or " " in normalised or len(normalised) > 254:
+            raise ValueError("email must be a well-formed address")
+        return normalised
+
+class AuthRegisterRequest(AuthLoginRequest):
+    @field_validator("password")
+    @classmethod
+    def _validate_password_strength(cls, value: str) -> str:
+        # MED-021 audit fix: enforce minimum strength baseline so trivially
+        # guessable passwords cannot be registered.
+        if len(value) < 8:
+            raise ValueError("password must be at least 8 characters long")
+        if len(set(value)) < 3:
+            raise ValueError("password must contain at least 3 unique characters")
+        return value
 
 
 # ── Session Management Schemas ────────────────────────────────────────────
@@ -263,8 +348,15 @@ async def serve_login():
 
 
 @app.post("/auth/register", status_code=201)
-async def register_user(req: AuthRequest, db: AsyncSession = Depends(get_db)):
+async def register_user(req: AuthRegisterRequest, request: Request, db: AsyncSession = Depends(get_db)):
     """Register a new user, checking if the email already exists."""
+    client_ip = request.client.host if request.client else "unknown"
+    if not _enforce_auth_rate_limit(client_ip):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many registration attempts; slow down.",
+        )
+
     stmt = select(User).where(User.email == req.email)
     result = await db.execute(stmt)
     if result.scalars().first() is not None:
@@ -281,9 +373,35 @@ async def register_user(req: AuthRequest, db: AsyncSession = Depends(get_db)):
     return {"message": "User registered successfully"}
 
 
+def _set_auth_cookie(response: JSONResponse, token: str) -> None:
+    """HIGH-013: deliver the JWT via an httpOnly, SameSite=Strict cookie."""
+    settings = get_settings()
+    response.set_cookie(
+        key=settings.AUTH_COOKIE_NAME,
+        value=token,
+        httponly=True,
+        secure=False,  # Flip to ``True`` once HTTPS (MED-022) is configured per environment.
+        samesite="strict",
+        max_age=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        path="/",
+    )
+
+
 @app.post("/auth/login")
-async def login_user(req: AuthRequest, db: AsyncSession = Depends(get_db)):
-    """Authenticate credentials and generate a JWT access token."""
+async def login_user(req: AuthLoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    """Authenticate credentials and emit JWT cookie (HIGH-013 httpOnly).
+
+    The response body still contains ``access_token`` so the frontend can
+    detect the legacy localStorage path during the phased migration; new
+    clients should rely on the cookie via ``credentials: 'include'``.
+    """
+    client_ip = request.client.host if request.client else "unknown"
+    if not _enforce_auth_rate_limit(client_ip):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many login attempts; slow down.",
+        )
+
     stmt = select(User).where(User.email == req.email)
     result = await db.execute(stmt)
     user = result.scalars().first()
@@ -295,12 +413,37 @@ async def login_user(req: AuthRequest, db: AsyncSession = Depends(get_db)):
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Generate token
     token = create_access_token(data={"sub": user.email})
-    return {
-        "access_token": token,
-        "token_type": "bearer"
-    }
+    response = JSONResponse({"access_token": token, "token_type": "bearer"})
+    _set_auth_cookie(response, token)
+    return response
+
+
+@app.post("/auth/logout")
+async def logout_user() -> JSONResponse:
+    """Clear the httpOnly auth cookie (HIGH-013)."""
+    settings = get_settings()
+    response = JSONResponse({"status": "ok"})
+    response.delete_cookie(settings.AUTH_COOKIE_NAME, path="/")
+    return response
+
+
+@app.post("/auth/refresh")
+async def refresh_token(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> JSONResponse:
+    """Issue a fresh access token (MED-020).
+
+    Accepts the existing JWT via either the httpOnly auth cookie or the
+    legacy ``Authorization`` header (HIGH-013 phased rollout).  Returns a
+    new token and refreshes the cookie so the front-end interceptor can
+    transparently rehydrate expired sessions.
+    """
+    token = create_access_token(data={"sub": current_user.email})
+    response = JSONResponse({"access_token": token, "token_type": "bearer"})
+    _set_auth_cookie(response, token)
+    return response
 
 
 # ── API Endpoints ───────────────────────────────────────────────────────
@@ -515,19 +658,18 @@ async def create_session(
     req: SessionCreateRequest,
     current_user: User = Depends(get_current_user),
 ) -> SessionCreateResponse:
-    """Create a new conversation session."""
+    """Create a new conversation session owned by the caller (HIGH-015)."""
     import uuid
-    from datetime import datetime, timezone
 
     conversation_director = _aetheris.get("conversation_director")
     if not conversation_director:
         raise HTTPException(status_code=503, detail="Conversation director not available")
 
     session_id = req.session_id or str(uuid.uuid4())
-    user_id = req.user_id or current_user.email
+    owner = req.user_id or current_user.email
 
     try:
-        session = conversation_director.create_session(session_id)
+        session = conversation_director.create_session(session_id, owner_email=owner)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -538,15 +680,30 @@ async def create_session(
     )
 
 
+def _require_session_ownership(
+    conversation_director: Any,
+    session_id: str,
+    current_user: User,
+) -> None:
+    """HIGH-015: reject cross-user session access with 403."""
+    if not conversation_director.verify_access(session_id, current_user.email):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Session does not belong to the authenticated user.",
+        )
+
+
 @app.get("/api/sessions/{session_id}", response_model=SessionMetadataResponse)
 async def get_session_metadata(
     session_id: str,
     current_user: User = Depends(get_current_user),
 ) -> SessionMetadataResponse:
-    """Retrieve session metadata."""
+    """Retrieve session metadata (HIGH-015 ownership enforced)."""
     conversation_director = _aetheris.get("conversation_director")
     if not conversation_director:
         raise HTTPException(status_code=503, detail="Conversation director not available")
+
+    _require_session_ownership(conversation_director, session_id, current_user)
 
     try:
         metadata = conversation_director.get_metadata(session_id)
@@ -561,10 +718,12 @@ async def get_session_history(
     session_id: str,
     current_user: User = Depends(get_current_user),
 ) -> SessionHistoryResponse:
-    """Retrieve conversation history."""
+    """Retrieve conversation history (HIGH-015 ownership enforced)."""
     conversation_director = _aetheris.get("conversation_director")
     if not conversation_director:
         raise HTTPException(status_code=503, detail="Conversation director not available")
+
+    _require_session_ownership(conversation_director, session_id, current_user)
 
     try:
         history = conversation_director.get_history(session_id)
@@ -579,12 +738,14 @@ async def close_session(
     session_id: str,
     current_user: User = Depends(get_current_user),
 ) -> SessionCloseResponse:
-    """Explicitly close a conversation session."""
+    """Explicitly close a conversation session (HIGH-015 ownership enforced)."""
     from datetime import datetime
 
     conversation_director = _aetheris.get("conversation_director")
     if not conversation_director:
         raise HTTPException(status_code=503, detail="Conversation director not available")
+
+    _require_session_ownership(conversation_director, session_id, current_user)
 
     try:
         conversation_director.transition_state(session_id, ConversationState.COMPLETED)
@@ -681,7 +842,7 @@ async def delete_checkpoints(
 
 @app.get("/api/providers/health", response_model=list[ProviderHealthResponse])
 async def get_providers_health(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("admin")),
 ) -> list[ProviderHealthResponse]:
     """Return health metrics for all registered providers."""
     if not _pool:
@@ -719,9 +880,9 @@ async def get_providers_health(
 async def trigger_provider_recovery(
     provider_name: str,
     req: ProviderRecoveryRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("admin")),
 ) -> ProviderRecoveryResponse:
-    """Manually trigger recovery for a DEAD provider."""
+    """Manually trigger recovery for a DEAD provider (admin only — MED-023)."""
     if not _pool:
         raise HTTPException(status_code=503, detail="Provider pool not available")
 
@@ -769,3 +930,26 @@ async def serve_index():
 
 if (WEB_DIR / "assets").exists():
     app.mount("/assets", StaticFiles(directory=str(WEB_DIR / "assets")), name="assets")
+
+@app.api_route("/{full_path:path}", methods=["GET"])
+async def catch_all(full_path: str):
+    """Catch-all route for SPA client-side routing."""
+    # Skip API routes and auth routes
+    if full_path.startswith("api/") or full_path.startswith("auth/") or full_path == "login":
+        raise HTTPException(status_code=404, detail="Not found")
+        
+    # Check if the requested file exists in WEB_DIR (e.g., favicon.svg)
+    import mimetypes
+    requested_file = WEB_DIR / full_path
+    if requested_file.is_file():
+        media_type, _ = mimetypes.guess_type(str(requested_file))
+        return FileResponse(requested_file, media_type=media_type)
+        
+    # If it's a request for a static asset that doesn't exist, return 404
+    if "." in full_path.split("/")[-1]:
+        raise HTTPException(status_code=404, detail="Asset not found")
+        
+    index = WEB_DIR / "index.html"
+    if not index.exists():
+        raise HTTPException(status_code=404, detail="Frontend not found.")
+    return FileResponse(index, media_type="text/html")

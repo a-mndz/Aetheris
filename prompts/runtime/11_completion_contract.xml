@@ -1,374 +1,45 @@
-```xml
-<aetheris_COMPLETION_CONTRACT version="1.0">
-
-<!-- ===================================================== -->
-<!--                  SYSTEM IDENTITY                      -->
-<!-- ===================================================== -->
-
+<aetheris_COMPLETION_CONTRACT version="2.0">
 <SYSTEM>
-
-The Completion Contract defines how
-aetheris finishes every execution.
-
-It SHALL NOT perform reasoning.
-
-It SHALL NOT modify pipeline results.
-
-It SHALL ensure deterministic
-pipeline shutdown.
-
-Every execution SHALL terminate
-through this contract.
-
+The Completion Contract defines how aetheris finishes every execution.
+It SHALL NOT perform reasoning or modify pipeline results. It SHALL ensure deterministic pipeline shutdown. Every execution SHALL terminate through this contract.
 </SYSTEM>
-
-<!-- ===================================================== -->
-<!--             COMPLETION PHILOSOPHY                     -->
-<!-- ===================================================== -->
-
-<COMPLETION_PHILOSOPHY>
-
-Every execution MUST end in
-a known state.
-
-Execution SHALL NEVER terminate
-unexpectedly.
-
-All runtime resources SHALL be released.
-
-All execution artifacts SHALL be finalized.
-
-Completion MUST be deterministic.
-
-</COMPLETION_PHILOSOPHY>
-
-<!-- ===================================================== -->
-<!--             VALID COMPLETION STATES                   -->
-<!-- ===================================================== -->
-
-<COMPLETION_STATES>
-
-SUCCESS
-
-PARTIAL_SUCCESS
-
-FAILED
-
-CANCELLED
-
-TIMEOUT
-
-SECURITY_ABORT
-
-SYSTEM_ABORT
-
-Only one completion state
-may exist.
-
-</COMPLETION_STATES>
-
-<!-- ===================================================== -->
-<!--            PRE-COMPLETION VALIDATION                  -->
-<!-- ===================================================== -->
-
+<PHILOSOPHY>
+Every execution MUST end in a known state. Execution SHALL NEVER terminate unexpectedly. All runtime resources SHALL be released. All execution artifacts SHALL be finalized. Completion MUST be deterministic.
+</PHILOSOPHY>
+<STATES>
+Valid completion states: SUCCESS, PARTIAL_SUCCESS, FAILED, CANCELLED, TIMEOUT, SECURITY_ABORT, SYSTEM_ABORT.
+Only one completion state may exist per execution.
+</STATES>
 <PRE_COMPLETION>
-
-Before completion verify
-
-Pipeline State
-
-↓
-
-Decision Contract
-
-↓
-
-Output Schema
-
-↓
-
-Reasoning Graph
-
-↓
-
-Execution Passport
-
-↓
-
-Security Status
-
-↓
-
-Resource Status
-
-If validation fails
-
-↓
-
-Return failure contract.
-
+Verify, in order: pipeline state, decision contract, output schema, reasoning graph, execution passport, security status, resource status.
+If validation fails, return a failure contract.
 </PRE_COMPLETION>
-
-<!-- ===================================================== -->
-<!--             RESOURCE CLEANUP                          -->
-<!-- ===================================================== -->
-
 <RESOURCE_CLEANUP>
-
-Release
-
-Active Providers
-
-↓
-
-Streaming Sessions
-
-↓
-
-Temporary Memory
-
-↓
-
-Execution Buffers
-
-↓
-
-Temporary Files
-
-↓
-
-Locks
-
-↓
-
-Open Handles
-
+Release, in order: active providers, streaming sessions, temporary memory, execution buffers, temporary files, locks, open handles.
 Never leave runtime resources active.
-
 </RESOURCE_CLEANUP>
-
-<!-- ===================================================== -->
-<!--             FINALIZATION                              -->
-<!-- ===================================================== -->
-
 <FINALIZATION>
-
-Finalize
-
-Decision Contract
-
-↓
-
-Reasoning Graph
-
-↓
-
-Execution Metrics
-
-↓
-
-Pipeline Statistics
-
-↓
-
-Session Summary
-
-↓
-
-Audit Log
-
+Finalize, in order: decision contract, reasoning graph, execution metrics, pipeline statistics, session summary, audit log.
 Never modify finalized artifacts.
-
 </FINALIZATION>
-
-<!-- ===================================================== -->
-<!--               STREAM TERMINATION                      -->
-<!-- ===================================================== -->
-
 <STREAM_TERMINATION>
-
-Complete active streams.
-
-Emit exactly one terminal event.
-
-Allowed events
-
-PIPELINE_COMPLETED
-
-PIPELINE_ABORTED
-
-Never emit multiple terminal events.
-
-Close transport cleanly.
-
+Complete active streams. Emit exactly one terminal event: PIPELINE_COMPLETED or PIPELINE_ABORTED. Never emit multiple terminal events. Close the transport cleanly.
 </STREAM_TERMINATION>
-
-<!-- ===================================================== -->
-<!--             CHECKPOINT ARCHIVAL                       -->
-<!-- ===================================================== -->
-
 <CHECKPOINTS>
-
-Persist
-
-Final Checkpoint
-
-↓
-
-Decision Contract
-
-↓
-
-Reasoning Graph
-
-↓
-
-Execution Timeline
-
-↓
-
-Runtime Metrics
-
-↓
-
-Failure Report (if applicable)
-
-Checkpoint becomes immutable.
-
+Persist: final checkpoint, decision contract, reasoning graph, execution timeline, runtime metrics, failure report (if applicable).
+The checkpoint becomes immutable.
 </CHECKPOINTS>
-
-<!-- ===================================================== -->
-<!--            SESSION SUMMARY                            -->
-<!-- ===================================================== -->
-
 <SESSION_SUMMARY>
-
-Generate
-
-Execution ID
-
-Conversation ID
-
-Execution Mode
-
-Pipeline Duration
-
-Providers Used
-
-Agents Executed
-
-Claims Processed
-
-Reasoning Loops
-
-Warnings
-
-Errors
-
-Completion State
-
+Generate: execution_id, conversation_id, execution_mode, pipeline_duration, providers_used, agents_executed, claims_processed, reasoning_loops, warnings, errors, completion_state.
 </SESSION_SUMMARY>
-
-<!-- ===================================================== -->
-<!--              AUDIT FINALIZATION                       -->
-<!-- ===================================================== -->
-
 <AUDIT>
-
-Finalize
-
-Execution Timeline
-
-↓
-
-Security Audit
-
-↓
-
-Failure Log
-
-↓
-
-Resource Usage
-
-↓
-
-Performance Metrics
-
-↓
-
-Pipeline History
-
+Finalize, in order: execution timeline, security audit, failure log, resource usage, performance metrics, pipeline history.
 Audit records SHALL be immutable.
-
 </AUDIT>
-
-<!-- ===================================================== -->
-<!--            POST-COMPLETION RULES                      -->
-<!-- ===================================================== -->
-
 <POST_COMPLETION>
-
-After completion
-
-No further reasoning
-
-No new claims
-
-No graph modifications
-
-No pipeline restarts
-
-No resource allocation
-
-Execution is closed.
-
+After completion: no further reasoning, no new claims, no graph modifications, no pipeline restarts, no resource allocation. Execution is closed.
 </POST_COMPLETION>
-
-<!-- ===================================================== -->
-<!--               RETURN CONTRACT                         -->
-<!-- ===================================================== -->
-
 <RETURN>
-
-Return
-
-Completion State
-
-Decision Contract
-
-Output Payload
-
-Execution Summary
-
-Resource Summary
-
-Audit Reference
-
-Checkpoint Reference
-
-Runtime Metrics
-
-Conversation Director
-returns control
-to the application.
-
+Return to the Conversation Director: completion_state, decision_contract, output_payload, execution_summary, resource_summary, audit_reference, checkpoint_reference, runtime_metrics.
 </RETURN>
-
-<!-- ===================================================== -->
-<!--                TERMINATION                            -->
-<!-- ===================================================== -->
-
-<TERMINATION>
-
-Execution lifecycle is complete.
-
-The runtime SHALL return
-to an idle state.
-
-Await the next execution request.
-
-</TERMINATION>
-
 </aetheris_COMPLETION_CONTRACT>
-```
