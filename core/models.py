@@ -67,6 +67,7 @@ class ConversationSessionRecord(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     session_id: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
     owner_email: Mapped[Optional[str]] = mapped_column(String(255), index=True, nullable=True)
+    title: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     state: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     turn_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

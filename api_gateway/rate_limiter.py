@@ -19,12 +19,12 @@ from enum import Enum
 from typing import Any, Callable, Coroutine, Optional
 
 from api_gateway.client import AsyncHTTPClient
-from api_gateway.strategy import ProviderStrategy
 from core.passport import ExecutionPassport
 from core.security import (
     SecurityValidationError,
     SecurityValidator,
 )
+from api_gateway.strategy import ProviderStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -235,10 +235,7 @@ class ProviderPool:
         # Auto-degrade if threshold breached
         if state.error_count >= self._degrade_threshold and state.status is ProviderStatus.HEALTHY:
             state.status = ProviderStatus.DEGRADED
-            logger.warning(
-                "Provider '%s' auto-degraded to DEGRADED.", provider_name,
-                extra={"provider": provider_name, "stage": "health_tracking", "status": "degraded"}
-            )
+            logger.warning("Provider '%s' auto-degraded to DEGRADED.", provider_name)
 
         # Update circuit breaker (handles consecutive_failures internally)
         self.update_circuit_breaker(provider_name, success=False)
@@ -575,10 +572,6 @@ class ResourceManager:
         self.request_queue: deque = deque(maxlen=self.QUEUE_CAPACITY)
         self.request_history: deque = deque()  # Track requests for metrics
         self._provider_base_rates: dict[str, float] = {}  # Store base rates for dynamic adjustment
-        # HIGH-012 audit fix: track outstanding holds so release_resources only
-        # returns a permit the manager actually acquired, preventing semaphore
-        # inflation when release is called without a balanced acquire.
-        self._held_permits: int = 0
 
     def configure_provider_limit(self, provider: str, config: RateLimitConfig) -> None:
         """Configure rate limits for a specific provider (Requirement 12.1)."""
@@ -655,14 +648,11 @@ class ResourceManager:
                 return False
 
         # Try to acquire global semaphore (non-blocking)
-        # HIGH-012 audit fix: removed buggy self.global_semaphore.release() call
-        # that inflated the available permit count above GLOBAL_CONCURRENCY_LIMIT.
-        # The semaphore is now acquired cleanly; a permit is consumed for the
-        # duration of the request and released by ``release_resources``.
-
         try:
+            self.global_semaphore.release() if self.global_semaphore.locked() else None
             await asyncio.wait_for(self.global_semaphore.acquire(), timeout=0.001)
         except (asyncio.TimeoutError, RuntimeError):
+            # Could not acquire concurrency slot - refund tokens
             provider_bucket.tokens += tokens
             if user_id is not None:
                 user_bucket = self.user_limits.get(user_id)
@@ -670,7 +660,6 @@ class ResourceManager:
                     user_bucket.tokens += tokens
             return False
 
-        self._held_permits += 1
         # Record request in history for metrics
         self.request_history.append({"timestamp": time.time(), "tokens": tokens})
 
@@ -713,28 +702,13 @@ class ResourceManager:
                 request_id,
                 len(self.request_queue),
                 retry_after,
-                extra={"request_id": request_id, "provider": provider, "stage": "rate_limiting", "queue_full": True}
             )
             return retry_after
 
     def release_resources(self, provider: str, user_id: Optional[str] = None) -> None:
-        """Release global concurrency slot after request completes.
-
-        HIGH-012 audit fix: track outstanding holds so we never release a
-        permit we did not acquire.  Without this guard, a misordered
-        release() would silently inflate the semaphore beyond the configured
-        concurrency limit.
-        """
-        if self._held_permits <= 0:
-            logger.warning(
-                "release_resources called without balanced acquire "
-                "(provider=%s) — semaphore permit NOT returned.",
-                provider,
-            )
-            return
+        """Release global concurrency slot after request completes."""
         try:
             self.global_semaphore.release()
-            self._held_permits -= 1
         except RuntimeError:
             logger.warning("Attempted to release semaphore without holding it.")
 

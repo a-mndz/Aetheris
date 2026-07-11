@@ -59,8 +59,8 @@ FREE_MODELS: Dict[str, List[str]] = {
 
 HYBRID_MODELS: Dict[str, List[str]] = {
     "generation": [
-        "unli/deepseek-chat",
         "groq/llama-3.3-70b-versatile",
+        "unli/deepseek-chat",
         "openai/gpt-4o-mini",
     ],
     "breaker": [
@@ -69,9 +69,9 @@ HYBRID_MODELS: Dict[str, List[str]] = {
         "openai/gpt-4o-mini",
     ],
     "judge": [
-        "unli/gpt-4o",
-        "kie/deepseek-chat",
-        "google/gemini-2.5-pro",
+        "groq/llama-3.3-70b-versatile",
+        "unli/deepseek-chat",
+        "unli/gpt-4o-mini",
     ],
 }
 
@@ -137,6 +137,24 @@ class ProviderStrategy:
 
         self._model_map = _MODE_TO_MAP[self._mode]
         logger.info("ProviderStrategy initialised in %s mode.", self._mode.value)
+
+    def set_mode(self, mode: str) -> None:
+        """Switch the active operating mode."""
+        try:
+            self._mode = StrategyMode(mode.upper())
+            self._model_map = _MODE_TO_MAP[self._mode]
+            logger.info("ProviderStrategy switched to %s mode.", self._mode.value)
+        except ValueError:
+            raise ValueError(f"Unknown strategy mode '{mode}'.") from None
+
+    def add_model(self, model: str, role: str = "generation") -> bool:
+        """Dynamically register a model into the active strategy chain for *role*."""
+        chain = self._model_map.setdefault(role, [])
+        if model not in chain:
+            chain.append(model)
+            logger.info("Added model '%s' to role '%s' in %s mode.", model, role, self._mode.value)
+            return True
+        return False
 
     # ── Public Properties ────────────────────────────────────────────
 

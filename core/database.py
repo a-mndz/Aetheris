@@ -16,27 +16,23 @@ settings = get_settings()
 # environment variable.  Default ``False`` keeps local development friction
 # free; production deployments must set this to ``True`` so the underlying
 # asyncpg driver negotiates an encrypted channel.
-_SSL_CONNECT_ARGS: dict = {"ssl": settings.DATABASE_SSL}
+def get_engine_kwargs(db_url: str) -> dict:
+    kwargs = {"echo": False}
+    if db_url.startswith("postgresql"):
+        kwargs.update({
+            "pool_size": 20,
+            "max_overflow": 10,
+            "pool_pre_ping": True,
+            "pool_recycle": 3600,
+            "connect_args": {"ssl": settings.DATABASE_SSL},
+        })
+    return kwargs
 
-# Create async engine.
-# For production safety and correctness:
-# - pool_size determines the number of connections to keep inside the pool.
-# - max_overflow determines how many connections can be opened beyond pool_size when needed.
-# - pool_pre_ping checks the health of connections before checking them out to prevent stale connection errors.
-# MED-025 prep: ``pool_recycle=3600`` rotates connections so long-idle
-# sessions do not silently die behind NAT / firewall timeouts.
 engine = create_async_engine(
     settings.DATABASE_URL,
-    echo=False,  # Set to True only for debugging generated SQL in development
-    pool_size=20,
-    max_overflow=10,
-    pool_pre_ping=True,
-    pool_recycle=3600,
-    connect_args=_SSL_CONNECT_ARGS,
+    **get_engine_kwargs(settings.DATABASE_URL),
 )
 
-# Create an async session maker.
-# - expire_on_commit=False prevents SQLAlchemy from querying the database on expired attribute access after commit, which is crucial for async workflows.
 async_session_maker = async_sessionmaker(
     bind=engine,
     autocommit=False,
@@ -44,6 +40,18 @@ async_session_maker = async_sessionmaker(
     expire_on_commit=False,
     class_=AsyncSession,
 )
+
+def rebind_engine(new_url: str):
+    """Rebind the engine and session maker to a new database URL (e.g. SQLite fallback)."""
+    global engine, async_session_maker
+    engine = create_async_engine(new_url, **get_engine_kwargs(new_url))
+    async_session_maker = async_sessionmaker(
+        bind=engine,
+        autocommit=False,
+        autoflush=False,
+        expire_on_commit=False,
+        class_=AsyncSession,
+    )
 
 # Modern Declarative Base class (SQLAlchemy 2.0 style)
 class Base(DeclarativeBase):

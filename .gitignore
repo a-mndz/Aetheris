@@ -36,6 +36,11 @@ logs/
 AUDIT_REPORT.md
 .kiro/
 .claude/
+.agents/
+skills/
+skills-lock.json
+session-*.md
+.impeccable/
 
 # Python Coverage
 .coverage
@@ -45,11 +50,11 @@ htmlcov/
 
 # Node
 node_modules/
-aetheris-ui/node_modules/
-aetheris-ui/dist/
-aetheris-ui/.vite/
-aetheris-ui/coverage/
+**/node_modules/
 dist/
+**/dist/
+**/.vite/
+**/coverage/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -64,3 +69,18 @@ pnpm-debug.log*
 
 # Recovered files
 recovered_*.txt
+
+# Tests
+test/
+tests/
+
+# Local reports & UI build
+PROJECT_ANALYSIS_2026-07-11.md
+findings.md
+CHANGELOG.md
+aetheris-ui
+
+# Local config & tooling
+pytest.ini
+.ruff.toml
+alembic.ini

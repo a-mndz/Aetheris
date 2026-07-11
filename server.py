@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -27,7 +28,8 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr, field_validator
 from pydantic import Field as PField
-from sqlalchemy import select
+from sqlalchemy import select, delete
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_gateway import AsyncAPIGateway, ProviderPool, ProviderStrategy
@@ -38,7 +40,7 @@ from api_gateway.rate_limiter import (
 )
 from core.config import get_settings
 from core.database import engine, get_db
-from core.models import Base, User
+from core.models import Base, User, ConversationSessionRecord, ConversationMessageRecord
 from core.security import (
     SecurityValidationError,
     create_access_token,
@@ -125,20 +127,15 @@ async def lifespan(app: FastAPI):
         format=settings.LOG_FORMAT,
     )
 
-    # Auto-create tables on startup
-    logger.info("Initializing database tables on startup...")
+    # Auto-create tables on startup in PostgreSQL
+    logger.info("Initializing PostgreSQL database tables on startup...")
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
     except Exception as exc:
-        # HIGH-005 audit fix: removed the Windows-specific PostgreSQL auto-start
-        # branch.  Connection failures now surface immediately so operators
-        # configure their database out-of-band; the server no longer hides
-        # configuration errors behind a ``subprocess`` invocation.
-        logger.error("Database connection failed at startup: %s", exc)
+        logger.error("PostgreSQL database connection failed at startup: %s", exc)
         raise RuntimeError(
-            "Database is unreachable.  Verify DATABASE_URL and that PostgreSQL "
-            "is running before launching the server.  See docs/deployment.md."
+            "PostgreSQL database is unreachable. Verify DATABASE_URL and ensure the PostgreSQL service is running."
         ) from exc
 
     global _background_tasks
@@ -218,7 +215,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-WEB_DIR = Path(__file__).parent / "aetheris-ui" / "dist"
+WEB_DIR = Path(__file__).parent / "new ui" / "frontend" / "dist"
 
 
 # ── Request / Response Models ───────────────────────────────────────────
@@ -345,6 +342,15 @@ async def serve_login():
     if not login_path.exists():
         raise HTTPException(status_code=404, detail="Login page not found.")
     return FileResponse(login_path, media_type="text/html")
+
+
+@app.get("/aetheris_hero_video_graded.mp4")
+async def serve_login_hero_video():
+    """Serve the login HTML hero video."""
+    video_path = Path(__file__).parent / "aetheris_hero_video_graded.mp4"
+    if not video_path.exists():
+        raise HTTPException(status_code=404, detail="Hero video not found.")
+    return FileResponse(video_path, media_type="video/mp4")
 
 
 @app.post("/auth/register", status_code=201)
@@ -613,30 +619,353 @@ async def handle_query_stream(
     )
 
 
+def _clean_model_name(model_str: str) -> str:
+    """Format an OpenRouter/Gateway model identifier into a crisp display name."""
+    parts = model_str.split("/")
+    base = parts[-1]
+    replacements = {
+        "claude-3.5-sonnet": "claude-3.5-sonnet",
+        "llama-3.3-70b-versatile": "llama-3.3-70b",
+        "meta-llama-3.1-70b-instruct": "llama-3.1-70b",
+        "llama-3.1-8b-instant": "llama-3.1-8b",
+        "gemini-2.5-flash": "gemini-2.5-flash",
+        "gemini-2.5-pro": "gemini-2.5-pro",
+        "gpt-4o-mini": "gpt-4o-mini",
+        "gpt-4o": "gpt-4o",
+        "deepseek-chat": "deepseek-chat",
+    }
+    return replacements.get(base, base)
+
+
+def _get_dynamic_models() -> list[dict[str, Any]]:
+    """Return dynamic model list with health status and latency from active strategy."""
+    if not _strategy:
+        return []
+
+    models_dict: dict[str, dict[str, Any]] = {}
+    for role in _strategy.supported_roles:
+        for model_str in _strategy.get_model_chain(role):
+            if model_str not in models_dict:
+                provider_key = extract_provider_key(model_str)
+                latency_str = "1.1s"
+                is_active = True
+                if _pool:
+                    metrics = _pool.get_health_metrics(provider_key)
+                    if metrics and metrics.mean_latency_ms > 0:
+                        latency_str = f"{(metrics.mean_latency_ms / 1000.0):.1f}s"
+                    state = _pool._providers.get(provider_key)
+                    if state:
+                        is_active = state.is_available and state.status.value != "dead"
+
+                clean_name = _clean_model_name(model_str)
+                models_dict[model_str] = {
+                    "id": clean_name.replace(".", "").replace("-", ""),
+                    "name": clean_name,
+                    "full_id": model_str,
+                    "provider": provider_key,
+                    "latency": latency_str,
+                    "active": is_active,
+                    "roles": [role],
+                }
+            else:
+                if role not in models_dict[model_str]["roles"]:
+                    models_dict[model_str]["roles"].append(role)
+    return list(models_dict.values())
+
+
 @app.get("/api/status")
 async def get_status(current_user: User = Depends(get_current_user)) -> dict:
-    """Return provider health + session telemetry."""
+    """Return provider health, dynamic models, and session telemetry."""
     return {
         "providers": _pool.get_all_statuses() if _pool else [],
-        "telemetry": {
-            "total_calls": observer.transaction_count,
-            "total_input_tokens": observer.total_input_tokens,
-            "total_output_tokens": observer.total_output_tokens,
-            "total_cost_usd": round(observer.accumulated_cost_usd, 6),
-        },
+        "models": _get_dynamic_models(),
+        "telemetry": observer.get_telemetry_dict(),
         "mode": _strategy.mode.value if _strategy else "UNKNOWN",
     }
+
+
+@app.get("/api/models")
+async def get_models(current_user: User = Depends(get_current_user)) -> dict:
+    """Return active models configured in the orchestrator strategy."""
+    return {"models": _get_dynamic_models()}
+
+
+class ModelAddRequest(BaseModel):
+    model: str
+    role: str = "generation"
+
+
+class ModelToggleRequest(BaseModel):
+    id: str
+    active: bool
+
+
+class StrategyModeRequest(BaseModel):
+    mode: str
+
+
+@app.post("/api/models/add")
+async def add_model_endpoint(
+    req: ModelAddRequest,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Dynamically register a new model in the active strategy and pool."""
+    if not _strategy or not _pool:
+        raise HTTPException(status_code=503, detail="Orchestrator not initialized.")
+    model_str = req.model.strip()
+    if not model_str:
+        raise HTTPException(status_code=400, detail="Model identifier cannot be empty.")
+    _strategy.add_model(model_str, req.role)
+    provider_key = extract_provider_key(model_str)
+    _pool.register_provider(provider_key, roles=[req.role])
+    return {"status": "success", "models": _get_dynamic_models()}
+
+
+@app.post("/api/models/toggle")
+async def toggle_model_endpoint(
+    req: ModelToggleRequest,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Enable or disable a model provider in the active pool."""
+    if not _pool:
+        raise HTTPException(status_code=503, detail="ProviderPool not initialized.")
+    for provider_name, state in _pool._providers.items():
+        clean_id = _clean_model_name(provider_name).replace(".", "").replace("-", "")
+        if clean_id == req.id or provider_name == req.id:
+            state.is_available = req.active
+            if req.active and state.status == ProviderStatus.DEAD:
+                state.status = ProviderStatus.DEGRADED
+                state.error_count = 0
+            break
+    return {"status": "success", "models": _get_dynamic_models()}
+
+
+@app.post("/api/strategy/mode")
+async def set_strategy_mode_endpoint(
+    req: StrategyModeRequest,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Switch the orchestrator strategy mode (FREE, HYBRID, PAID)."""
+    if not _strategy or not _pool:
+        raise HTTPException(status_code=503, detail="Orchestrator not initialized.")
+    try:
+        _strategy.set_mode(req.mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+class ConversationSaveRequest(BaseModel):
+    id: str
+    title: str = "New Conversation"
+    mode: str = "HYBRID"
+    transcript: list[dict[str, Any]] = PField(default_factory=list)
+
+
+@app.get("/api/conversations")
+async def get_conversations(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Return all conversation sessions owned by the current user from PostgreSQL."""
+    stmt = (
+        select(ConversationSessionRecord)
+        .where(ConversationSessionRecord.owner_email == current_user.email)
+        .options(selectinload(ConversationSessionRecord.messages))
+        .order_by(ConversationSessionRecord.created_at.desc())
+    )
+    res = await db.execute(stmt)
+    sessions = res.scalars().all()
+
+    convs = []
+    for s in sessions:
+        sorted_msgs = sorted(s.messages, key=lambda m: m.timestamp)
+        convs.append({
+            "id": s.session_id,
+            "title": s.title or "Conversation",
+            "time": s.created_at.strftime("%b %d, %H:%M") if s.created_at else "Just now",
+            "mode": s.state,
+            "agentsCount": 1,
+            "score": None,
+            "transcript": [
+                {
+                    "id": str(m.id),
+                    "role": m.role,
+                    "text": m.content,
+                }
+                for m in sorted_msgs
+            ],
+        })
+    return {"conversations": convs}
+
+
+@app.post("/api/conversations")
+async def save_conversation(
+    req: ConversationSaveRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Persist or update a conversation session and its transcript in PostgreSQL."""
+    stmt = (
+        select(ConversationSessionRecord)
+        .where(
+            ConversationSessionRecord.session_id == req.id,
+            ConversationSessionRecord.owner_email == current_user.email,
+        )
+        .options(selectinload(ConversationSessionRecord.messages))
+    )
+    res = await db.execute(stmt)
+    session_rec = res.scalars().first()
+
+    if session_rec is None:
+        session_rec = ConversationSessionRecord(
+            session_id=req.id,
+            owner_email=current_user.email,
+            title=req.title[:255],
+            state=req.mode[:32],
+        )
+        db.add(session_rec)
+        await db.flush()
+    else:
+        session_rec.title = req.title[:255]
+        session_rec.state = req.mode[:32]
+        session_rec.turn_count = len(req.transcript)
+        await db.execute(
+            delete(ConversationMessageRecord).where(
+                ConversationMessageRecord.session_id == session_rec.id
+            )
+        )
+
+    for turn in req.transcript:
+        msg_text = turn.get("text") or ""
+        msg_role = turn.get("role") or "user"
+        msg_rec = ConversationMessageRecord(
+            session_id=session_rec.id,
+            role=msg_role[:16],
+            content=msg_text,
+        )
+        db.add(msg_rec)
+
+    session_rec.turn_count = len(req.transcript)
+    await db.commit()
+    return {"status": "ok", "id": req.id}
+
+
+@app.delete("/api/conversations/{session_id}")
+async def delete_conversation(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Delete a conversation owned by current user from PostgreSQL."""
+    stmt = select(ConversationSessionRecord).where(
+        ConversationSessionRecord.session_id == session_id,
+        ConversationSessionRecord.owner_email == current_user.email,
+    )
+    res = await db.execute(stmt)
+    session_rec = res.scalars().first()
+    if session_rec:
+        await db.delete(session_rec)
+        await db.commit()
+    return {"status": "deleted"}
+
+
+def _get_vault_status() -> list[dict[str, Any]]:
+    """Return secure masked status of API keys for each provider."""
+    providers_meta = [
+        {"account": "OPENROUTER_API_KEY", "name": "OpenRouter", "description": "Unified gateway for Anthropic, Llama, DeepSeek & Qwen models"},
+        {"account": "OPENAI_API_KEY", "name": "OpenAI", "description": "GPT-4o, GPT-4o-mini, and Reasoning models"},
+        {"account": "GOOGLE_API_KEY", "name": "Google AI Studio", "description": "Gemini 2.5 Flash, Gemini 2.5 Pro"},
+        {"account": "GROQ_API_KEY", "name": "Groq Cloud", "description": "Ultra-fast Llama 3.3 70B & Llama 3.1 8B inference"},
+        {"account": "NVIDIA_NIM_API_KEY", "name": "NVIDIA NIM", "description": "Enterprise Nemotron & Llama 405B inference"},
+        {"account": "MISTRAL_API_KEY", "name": "Mistral AI", "description": "Mistral Large & Codestral models"},
+        {"account": "CUSTOM_GATEWAY_KEY", "name": "Custom API Gateway", "description": "Custom endpoint or Local LLM (Ollama / vLLM / LiteLLM)"},
+    ]
+    results = []
+    for p in providers_meta:
+        env_var = f"AETHERIS_{p['account']}" if not p['account'].startswith("AETHERIS_") else p['account']
+        val = os.environ.get(env_var, "") or os.environ.get(p["account"], "")
+        has_key = bool(val and len(val.strip()) > 4)
+        masked = f"••••••••••••{val.strip()[-4:]}" if has_key else "Not Configured"
+        results.append({
+            "account": p["account"],
+            "name": p["name"],
+            "description": p["description"],
+            "configured": has_key,
+            "masked": masked,
+        })
+    return results
+
+
+class VaultSaveRequest(BaseModel):
+    account: str
+    secret: str
+    gateway_url: str | None = None
+
+
+class CustomModelRequest(BaseModel):
+    model_id: str
+    display_name: str | None = None
+    role: str = "generation"
+    gateway_url: str | None = None
+
+
+@app.get("/api/config/vault")
+async def get_vault_status(current_user: User = Depends(get_current_user)) -> dict:
+    """Return secure masked status of provider API keys in vault."""
+    return {"providers": _get_vault_status()}
+
+
+@app.post("/api/config/vault")
+async def save_vault_secret(
+    req: VaultSaveRequest,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Save an API key securely into OS Keyring and running memory enclave."""
+    account = req.account.strip()
+    secret = req.secret.strip()
+    allowed_accounts = {
+        "OPENROUTER_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY",
+        "GROQ_API_KEY", "NVIDIA_NIM_API_KEY", "MISTRAL_API_KEY",
+        "CUSTOM_GATEWAY_KEY", "GITHUB_TOKEN",
+    }
+    if account not in allowed_accounts:
+        raise HTTPException(status_code=400, detail="Invalid account identifier.")
+    if secret:
+        os.environ[f"AETHERIS_{account}"] = secret
+        os.environ[account] = secret
+        try:
+            import keyring
+            keyring.set_password("Aetheris", account, secret)
+        except Exception as exc:
+            logger.debug("OS Keyring unavailable or non-writable: %s", exc)
+    if req.gateway_url:
+        os.environ[f"AETHERIS_{account}_URL"] = req.gateway_url.strip()
+    return {"status": "success", "providers": _get_vault_status()}
+
+
+@app.post("/api/models/custom")
+async def register_custom_model(
+    req: CustomModelRequest,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Register a custom model and optional gateway URL in orchestrator."""
+    if not _strategy or not _pool:
+        raise HTTPException(status_code=503, detail="Orchestrator not initialized.")
+    model_str = req.model_id.strip()
+    if not model_str:
+        raise HTTPException(status_code=400, detail="Model ID cannot be empty.")
+    _strategy.add_model(model_str, req.role)
+    provider_key = extract_provider_key(model_str)
+    _pool.register_provider(provider_key, roles=[req.role])
+    if req.gateway_url:
+        os.environ[f"AETHERIS_{provider_key.upper()}_GATEWAY_URL"] = req.gateway_url.strip()
+    return {"status": "success", "models": _get_dynamic_models()}
 
 
 @app.get("/api/telemetry")
 async def get_telemetry(current_user: User = Depends(get_current_user)) -> dict:
     """Return session telemetry metrics."""
-    return {
-        "total_calls": observer.transaction_count,
-        "total_input_tokens": observer.total_input_tokens,
-        "total_output_tokens": observer.total_output_tokens,
-        "total_cost_usd": round(observer.accumulated_cost_usd, 6),
-    }
+    return observer.get_telemetry_dict()
 
 
 @app.get("/api/config")
@@ -944,6 +1273,11 @@ async def catch_all(full_path: str):
     if requested_file.is_file():
         media_type, _ = mimetypes.guess_type(str(requested_file))
         return FileResponse(requested_file, media_type=media_type)
+        
+    root_file = Path(__file__).parent / full_path
+    if root_file.is_file() and "." in full_path.split("/")[-1]:
+        media_type, _ = mimetypes.guess_type(str(root_file))
+        return FileResponse(root_file, media_type=media_type)
         
     # If it's a request for a static asset that doesn't exist, return 404
     if "." in full_path.split("/")[-1]:
