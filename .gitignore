@@ -84,3 +84,9 @@ aetheris-ui
 pytest.ini
 .ruff.toml
 alembic.ini
+
+# Reference documentation & repair reports
+docs/aetheris_architecture.md
+docs/api.md
+docs/deployment.md
+docs/PROJECT_BIBLE.md

@@ -23,14 +23,31 @@ The entire pipeline is **async-native**, runs with **bounded concurrency**, and 
 
 ---
 
+## Interface & Visual Preview
+
+### Web Dashboard & Reasoning Pipeline
+The primary triadic reasoning interface featuring live four-stage execution, agent reasoning expansion, and real-time telemetry:
+
+![aetheris Web Dashboard](docs/images/aetheris_dashboard_ui.png)
+
+### Authentication & Login Interface
+Dedicated dark-mode glassmorphism login and registration page (`/login`) with JWT httpOnly cookie security:
+
+![aetheris Login Page](docs/images/aetheris_login_ui.png)
+
+---
+
 ## Technical Stack & Built-With
 
 * **Core Backend:** Python 3.11+ (`asyncio`, `httpx.AsyncClient`)
-* **API Framework:** FastAPI & Uvicorn for asynchronous server endpoints
+* **API Framework:** FastAPI & Uvicorn for asynchronous server endpoints with strict CORS allowlists and CSRF origin checks
+* **Database & Persistence:** Async PostgreSQL via SQLAlchemy 2.0 (`asyncpg`) with automated schema initialization on startup
+* **Security & Auth:** Secure JWT authentication via `httpOnly`, `SameSite=Strict` cookies, password strength verification, and IP-scoped rate limiting
 * **Data Validation:** Pydantic V2 & Pydantic-Settings for config validation and data contracts
 * **Output Processing:** `json-repair` for parsing and correcting malformed JSON LLM outputs
 * **Prompt Layout:** Strictly validated XML formats layered dynamically at runtime
-* **Frontend Web Dashboard:** Glassmorphism UI built with modern HTML5, CSS3 (Vanilla), and Vanilla JS
+* **Frontend Web Dashboard:** Modern React 19 + Vite + GSAP 3 animation engine with triadic dark-mode glassmorphism (`new ui/frontend/`)
+* **Authentication UI:** Dedicated responsive HTML5/CSS3 cosmic dark-mode login interface (`aetheris_login.html`)
 * **LLM Providers:** Native integration with OpenRouter, Groq, NVIDIA NIM, GitHub Models, and local Ollama
 
 ---
@@ -61,7 +78,7 @@ The entire pipeline is **async-native**, runs with **bounded concurrency**, and 
               ┌─────────────────────────────┐
               │  Final Answer + Score +     │
               │  Agent Reasoning (expandable)│
-              └─────────────────────────────┘
+              └─────────────┬──────────────┘
 ```
 
 ### 1. Dynamic Runtime Prompt Layering
@@ -77,6 +94,7 @@ All prompt templates are formatted in clean, single-root XML structures for stru
 * **Priority Routing:** If the primary model for a stage fails or times out, the system automatically escalates to a fallback provider chain.
 * **Circuit Breaker:** Tracks failures per provider. If a provider fails 3 consecutive times, it enters cooldown (`DEAD`) and is bypassed for 60 seconds.
 * **Simulation Mode:** Automatically matches environment variables. If no API keys are present, the system runs with deterministic mock responses to enable cost-free development.
+
 ### 3. AETHERIS Architecture Integration
 aetheris now incorporates the Adaptive Multi-Model Reasoning Orchestrator (AETHERIS) architecture, adding:
 * **Conversation Management**: Multi-turn dialogue state with automatic token limit truncation.
@@ -92,8 +110,13 @@ aetheris now incorporates the Adaptive Multi-Model Reasoning Orchestrator (AETHE
   * `/checkpoints/{request_id}`, `/checkpoints/{checkpoint_id}/restore` - Pipeline checkpoints.
   * `/providers/health`, `/providers/{provider_name}/recovery` - Monitor and recover provider health.
   * `/telemetry` - Aggregated metrics for decision engine, resources, and security.
+  * `/auth/login`, `/auth/register`, `/auth/logout`, `/auth/refresh` - Secure authentication routes with rate limiting.
 * **New Request Parameters**: `session_id`, `user_id` for conversation tracking and rate limiting.
 * **New Response Fields**: `request_id`, `security_metadata`, `unverified_claims`, `conversation_metadata`.
+
+### 5. Persistent Storage & Security Layer
+* **PostgreSQL ORM Layer (`core/database.py` & `core/models.py`)**: Stores user accounts (`User`), active dialogue sessions (`ConversationSessionRecord`), and historical turns (`ConversationMessageRecord`) via SQLAlchemy 2.0 async sessions.
+* **Enterprise Auth & CSRF Protection (`core/security.py`)**: All sensitive operations enforce JWT authentication delivered via `httpOnly`, `SameSite=Strict` cookies, with automatic CSRF origin verification on state-changing requests.
 
 ---
 
@@ -104,9 +127,11 @@ aetheris now incorporates the Adaptive Multi-Model Reasoning Orchestrator (AETHE
 | **Validation Arbitrage** | Two agents (Logician + Creative) reason independently; the Judge resolves contradictions and scores consistency. You get a confidence score, not just a guess. |
 | **Provider Resilience** | Supports OpenRouter, Groq, NVIDIA NIM, GitHub Models, and local Ollama. If one provider is down, the pipeline automatically tries the next. |
 | **Circuit Breaker + Cooldown** | Dead providers are automatically excluded. No manual intervention needed when a service is rate-limited or flaky. |
+| **Secure Auth & Identity** | Dedicated login & registration UI with `httpOnly` Strict SameSite cookie authentication, IP rate limiting, and CSRF origin enforcement. |
+| **Persistent Session Memory** | Async PostgreSQL database storage tracks multi-turn dialogue histories, user profiles, and session states across restarts. |
 | **Zero-cost Testing** | Simulation mode works without any API keys. Test the full pipeline, UI, and error paths locally for free. |
 | **Structured, Typed Outputs** | Every agent response is validated against Pydantic V2 schemas. Malformed JSON is auto-repaired before validation. |
-| **Dark-mode Web UI** | A premium glassmorphism chat interface with animated pipeline progress, expandable agent reasoning, telemetry dashboard, and responsive design. |
+| **Dark-mode Web UI** | A premium React 19 + GSAP glassmorphism interface with animated pipeline progress, expandable agent reasoning, telemetry dashboard, and responsive design. |
 | **Async-Native** | Built on `asyncio`, `httpx.AsyncClient`, and `FastAPI`. Handles concurrent agent calls without blocking. |
 | **Three Operating Modes** | `FREE` (open-weight models only), `HYBRID` (premium + free fallback), `PAID` (top-tier models only). Switch without code changes. |
 
@@ -180,7 +205,8 @@ python main.py
 ```bash
 python main.py --web
 ```
-Then open your browser at `http://localhost:8000`.
+* **Main Reasoning Dashboard:** Open your browser at `http://localhost:8000/`
+* **Login & Authentication Portal:** Open your browser at `http://localhost:8000/login`
 
 ---
 
@@ -189,14 +215,18 @@ Then open your browser at `http://localhost:8000`.
 ```
 aetheris/
 ├── main.py                    # CLI entry point (REPL + --web flag)
-├── server.py                  # FastAPI web server
-├── requirements.txt           # Python dependencies
+├── server.py                  # FastAPI web server & auth/page routing
+├── aetheris_login.html        # Dedicated dark-mode login & sign-up UI (/login)
+├── requirements.txt           # Python backend dependencies
 ├── .env                       # Environment variables (gitignored)
 ├── .gitignore
 │
 ├── core/
 │   ├── config.py              # Pydantic-Settings configuration loader
-│   └── schemas.py             # Pydantic V2 data contracts (AgentOutput, aetherisOutput)
+│   ├── database.py            # Async SQLAlchemy engine & PostgreSQL session maker
+│   ├── models.py              # ORM models (User, ConversationSessionRecord, etc.)
+│   ├── security.py            # JWT auth, password hashing & role enforcement
+│   └── schemas.py             # Pydantic V2 data contracts
 │
 ├── api_gateway/
 │   ├── client.py              # HTTPX AsyncClient + simulation mode
@@ -210,6 +240,8 @@ aetheris/
 ├── orchestrator/
 │   ├── pipelines.py           # Micro-Mode async execution pipeline
 │   ├── evaluation.py          # Synthesis judge (arbitrate + validate)
+│   ├── conversation.py        # Conversation state & dialogue tracking
+│   ├── streaming.py           # Real-time SSE event streaming
 │   └── memory.py              # Epistemic failure-tracking bus
 │
 ├── prompts/
@@ -219,8 +251,14 @@ aetheris/
 ├── telemetry/
 │   └── observer.py            # Token/cost tracking & session reports
 │
-└── web/
-    └── index.html             # Single-page dark-mode chat UI
+├── new ui/
+│   └── frontend/              # Modern React 19 + Vite + GSAP web dashboard
+│
+└── docs/
+    ├── images/                # Visual UI screenshots & previews
+    │   ├── aetheris_dashboard_ui.png
+    │   └── aetheris_login_ui.png
+    └── ...                    # Architecture, API & deployment documentation
 ```
 
 ---
