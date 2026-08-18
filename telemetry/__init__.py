@@ -1,3 +1,3 @@
 # aetheris — telemetry package
 
-from telemetry.observer import observer, TelemetryObserver
+from telemetry.observer import TelemetryObserver, observer

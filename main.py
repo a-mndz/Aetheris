@@ -10,8 +10,8 @@ structured output to the console.
 
 from __future__ import annotations
 
-import asyncio
 import argparse
+import asyncio
 import json
 import logging
 import sys
@@ -24,15 +24,13 @@ from typing import Any
 # keyring is empty or unavailable, in which case ``aetherisConfig``
 # falls through to Simulation Mode.
 import secrets_bootstrap  # noqa: F401  (side-effecting import)
-
-from api_gateway import ProviderPool, AsyncAPIGateway, AllModelsExhaustedError, ProviderStrategy
+from api_gateway import AllModelsExhaustedError, AsyncAPIGateway, ProviderPool, ProviderStrategy
 from api_gateway.rate_limiter import extract_provider_key
 from core.config import get_settings
 from core.passport import ExecutionPassport
-from orchestrator import run_micro_mode
 from orchestrator.aetheris_orchestrator import (
-    initialize_aetheris_components,
     create_request_passport,
+    initialize_aetheris_components,
 )
 from telemetry.observer import observer
 
@@ -247,7 +245,7 @@ async def main() -> None:
                 session_id = str(uuid.uuid4())
 
                 result = await asyncio.wait_for(
-                    run_micro_mode(
+                    aetheris["execution_manager"].execute(
                         user_query=user_input,
                         gateway=gateway,
                         strategy=strategy,
@@ -347,6 +345,7 @@ if __name__ == "__main__":
 
     if args.web:
         import uvicorn
+
         from server import app
         print(
             f"\n{_BOLD}{_CYAN}"

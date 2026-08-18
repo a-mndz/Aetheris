@@ -3,8 +3,12 @@ Database configuration using SQLAlchemy (async) and asyncpg.
 Provides async engine, sessionmaker, Base declarative class, and dependency injection helper.
 """
 
+from pathlib import Path
 from typing import AsyncGenerator
 
+from alembic.config import Config
+from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -33,6 +37,26 @@ engine = create_async_engine(
     **get_engine_kwargs(settings.DATABASE_URL),
 )
 
+
+async def verify_schema_current() -> None:
+    """Fail startup when database revision is not at Alembic head."""
+    root = Path(__file__).resolve().parent.parent
+    alembic_config = Config(str(root / "alembic.ini"))
+    alembic_config.set_main_option("script_location", str(root / "migrations"))
+    expected_heads = set(ScriptDirectory.from_config(alembic_config).get_heads())
+    async with engine.connect() as connection:
+        current_heads = await connection.run_sync(
+            lambda sync_connection: set(
+                MigrationContext.configure(sync_connection).get_current_heads()
+            )
+        )
+    if current_heads != expected_heads:
+        raise RuntimeError(
+            "Database schema is not current: "
+            f"found {sorted(current_heads) or ['unversioned']}, "
+            f"expected {sorted(expected_heads)}. Run 'alembic upgrade head'."
+        )
+
 async_session_maker = async_sessionmaker(
     bind=engine,
     autocommit=False,
@@ -40,18 +64,6 @@ async_session_maker = async_sessionmaker(
     expire_on_commit=False,
     class_=AsyncSession,
 )
-
-def rebind_engine(new_url: str):
-    """Rebind the engine and session maker to a new database URL (e.g. SQLite fallback)."""
-    global engine, async_session_maker
-    engine = create_async_engine(new_url, **get_engine_kwargs(new_url))
-    async_session_maker = async_sessionmaker(
-        bind=engine,
-        autocommit=False,
-        autoflush=False,
-        expire_on_commit=False,
-        class_=AsyncSession,
-    )
 
 # Modern Declarative Base class (SQLAlchemy 2.0 style)
 class Base(DeclarativeBase):

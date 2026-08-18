@@ -14,15 +14,55 @@ The orchestrator calls :meth:`ProviderStrategy.get_model_chain` to obtain
 an ordered list of models to attempt for a given role.  The first element
 is the *primary* pick; subsequent elements are fallbacks tried in order
 if an upstream call fails or times out.
+
+RFC-002 §7 note: the capability matrix (``MODEL_CAPABILITY_WEIGHTS``) is **not**
+inlined here.  It lives in ``config/capabilities/model_capabilities.json`` and is
+read through ``api_gateway/capabilities.py`` (per ADR-005 — capability files are
+never hardcoded).  :meth:`ProviderStrategy.get_model_chain_for_plan` consults that
+loader to re-rank a role's chain by the plan's ``task_type`` weights and to widen
+the chain for ``high`` / ``critical`` complexity.
 """
 
 from __future__ import annotations
 
 import logging
 from enum import Enum
-from typing import Dict, List
+from typing import Any, Dict, List
+
+from api_gateway.capabilities import CapabilityRegistry, get_capability_registry
 
 logger = logging.getLogger(__name__)
+
+# ── Route-aware role aliases (RFC-002 §7) ────────────────────────────────
+# Map the seven route-aware role names onto the three underlying model-map
+# roles so ``get_model_chain`` keeps working while callers can request a
+# route-specific role. Generation routes → ``generation``; judges → ``judge``.
+ROUTE_ROLE_ALIASES: Dict[str, str] = {
+    "coding_generation": "generation",
+    "research_generation": "generation",
+    "math_generation": "generation",
+    "creative_generation": "generation",
+    "cheap_judge": "judge",
+    "standard_judge": "judge",
+    "critical_judge": "judge",
+}
+
+# Which generation role a task_type maps to (for get_model_chain_for_plan).
+_TASK_TYPE_TO_GENERATION_ROLE: Dict[str, str] = {
+    "coding": "coding_generation",
+    "research": "research_generation",
+    "math": "math_generation",
+    "creative": "creative_generation",
+    "general": "generation",
+}
+
+# Complexity → how many models the plan chain should carry (primary + fallbacks).
+_COMPLEXITY_CHAIN_DEPTH: Dict[str, int] = {
+    "low": 1,
+    "medium": 2,
+    "high": 3,
+    "critical": 4,
+}
 
 
 # ── Operating Modes ──────────────────────────────────────────────────────
@@ -124,9 +164,9 @@ class ProviderStrategy:
     >>> strategy = ProviderStrategy("HYBRID")
     >>> strategy.get_model_chain("generation")
     ['openrouter/anthropic/claude-sonnet-4.6', 'openrouter/openai/gpt-4o-mini', 'openrouter/meta-llama/llama-3-8b-instruct']
-    """
+    """  # noqa: E501
 
-    def __init__(self, mode: str) -> None:
+    def __init__(self, mode: str, *, capabilities: CapabilityRegistry | None = None) -> None:
         try:
             self._mode = StrategyMode(mode.upper())
         except ValueError:
@@ -135,14 +175,21 @@ class ProviderStrategy:
                 f"Unknown strategy mode '{mode}'. Must be one of: {valid}."
             ) from None
 
-        self._model_map = _MODE_TO_MAP[self._mode]
+        self._model_map = {
+            role: list(models) for role, models in _MODE_TO_MAP[self._mode].items()
+        }
+        self._disabled_models: set[str] = set()
+        self._capabilities = capabilities or get_capability_registry()
         logger.info("ProviderStrategy initialised in %s mode.", self._mode.value)
 
     def set_mode(self, mode: str) -> None:
         """Switch the active operating mode."""
         try:
             self._mode = StrategyMode(mode.upper())
-            self._model_map = _MODE_TO_MAP[self._mode]
+            self._model_map = {
+                role: list(models) for role, models in _MODE_TO_MAP[self._mode].items()
+            }
+            self._disabled_models.clear()
             logger.info("ProviderStrategy switched to %s mode.", self._mode.value)
         except ValueError:
             raise ValueError(f"Unknown strategy mode '{mode}'.") from None
@@ -156,6 +203,19 @@ class ProviderStrategy:
             return True
         return False
 
+    def set_model_enabled(self, model: str, enabled: bool) -> bool:
+        """Enable or disable one exact model identifier across role chains."""
+        if not any(model in chain for chain in self._model_map.values()):
+            return False
+        if enabled:
+            self._disabled_models.discard(model)
+        else:
+            self._disabled_models.add(model)
+        return True
+
+    def is_model_enabled(self, model: str) -> bool:
+        return model not in self._disabled_models
+
     # ── Public Properties ────────────────────────────────────────────
 
     @property
@@ -167,6 +227,11 @@ class ProviderStrategy:
     def supported_roles(self) -> list[str]:
         """Roles for which model chains are defined in the active mode."""
         return list(self._model_map.keys())
+
+    def get_configured_model_chain(self, role: str) -> list[str]:
+        """Return configured models including temporarily disabled entries."""
+        role = ROUTE_ROLE_ALIASES.get(role, role)
+        return list(self._model_map.get(role, []))
 
     # ── Core API ─────────────────────────────────────────────────────
 
@@ -198,7 +263,14 @@ class ProviderStrategy:
         ValueError
             If *role* is not defined in **any** mode's model map.
         """
-        chain = list(self._model_map.get(role, []))
+        # Route-aware role names (RFC-002 §7) alias onto the underlying
+        # generation/judge roles so callers can request e.g. 'critical_judge'.
+        role = ROUTE_ROLE_ALIASES.get(role, role)
+        chain = [
+            model
+            for model in self._model_map.get(role, [])
+            if model not in self._disabled_models
+        ]
 
         # If the role is entirely absent from the active map, try to pull
         # models from another tier so the system degrades gracefully.
@@ -229,6 +301,52 @@ class ProviderStrategy:
         )
         return chain
 
+    def get_model_chain_for_plan(self, plan: Any) -> list[str]:
+        """
+        Return a plan-aware, capability-ranked model chain (RFC-002 §7).
+
+        Unlike :meth:`get_model_chain` (role-only), this consults the plan's
+        ``task_type`` and ``complexity`` to:
+
+        * pick the route-specific generation role
+          (``coding_generation`` / ``research_generation`` / …),
+        * **re-rank** the candidate models best-first by their per-``task_type``
+          capability weight from ``model_capabilities.json`` (via
+          ``api_gateway/capabilities.py``), so a coding request prefers the
+          strongest coding model available in the active tier, and
+        * **size** the chain by complexity — ``low`` requests get a single
+          cheap primary, ``critical`` requests get the full fallback depth.
+
+        ``plan`` is duck-typed: any object exposing ``task_type`` and
+        ``complexity`` attributes (e.g. a ``TaskProfile``) works. Missing
+        attributes fall back to ``general`` / ``medium``. Never raises — an
+        unknown route degrades to the plain ``generation`` chain.
+        """
+        task_type = getattr(plan, "task_type", "general") or "general"
+        complexity = getattr(plan, "complexity", "medium") or "medium"
+
+        role = _TASK_TYPE_TO_GENERATION_ROLE.get(task_type, "generation")
+        chain = self.get_model_chain(role)
+
+        # Re-rank by capability weight for this task_type (stable: unknown
+        # models keep the neutral 0.5 and hold their relative order).
+        weights = {m: self._capabilities.model_weight(m, task_type) for m in chain}
+        ranked = sorted(chain, key=lambda m: weights[m], reverse=True)
+
+        depth = _COMPLEXITY_CHAIN_DEPTH.get(complexity, 2)
+        # Always keep at least the primary; never exceed what the chain holds.
+        depth = max(1, min(depth, len(ranked)))
+        selected = ranked[:depth]
+
+        logger.debug(
+            "Plan chain for task_type=%s complexity=%s (%s mode): %s",
+            task_type,
+            complexity,
+            self._mode.value,
+            selected,
+        )
+        return selected
+
     # ── Private Helpers ──────────────────────────────────────────────
 
     def _cross_tier_fallback(
@@ -254,6 +372,10 @@ class ProviderStrategy:
             if tier is self._mode:
                 continue  # Already consumed.
             for model in _MODE_TO_MAP[tier].get(role, []):
-                if model not in exclude_set and model not in result:
+                if (
+                    model not in exclude_set
+                    and model not in result
+                    and model not in self._disabled_models
+                ):
                     result.append(model)
         return result

@@ -19,12 +19,12 @@ from enum import Enum
 from typing import Any, Callable, Coroutine, Optional
 
 from api_gateway.client import AsyncHTTPClient
+from api_gateway.strategy import ProviderStrategy
 from core.passport import ExecutionPassport
 from core.security import (
     SecurityValidationError,
     SecurityValidator,
 )
-from api_gateway.strategy import ProviderStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -544,7 +544,7 @@ class ResourceManager:
     """
     Enforces rate limits at provider, user, and global levels with dynamic
     adjustment based on provider health status.
-    
+
     Specifications from Requirement 12:
     - Per-provider rate limit: 100 requests/minute with 10-token bucket capacity
     - Global concurrency limit: 100 concurrent requests across all providers
@@ -572,6 +572,7 @@ class ResourceManager:
         self.request_queue: deque = deque(maxlen=self.QUEUE_CAPACITY)
         self.request_history: deque = deque()  # Track requests for metrics
         self._provider_base_rates: dict[str, float] = {}  # Store base rates for dynamic adjustment
+        self._held_permits: int = 0
 
     def configure_provider_limit(self, provider: str, config: RateLimitConfig) -> None:
         """Configure rate limits for a specific provider (Requirement 12.1)."""
@@ -630,7 +631,7 @@ class ResourceManager:
     ) -> bool:
         """
         Acquire resources (rate limit tokens), return True if allowed.
-        
+
         Checks provider TokenBucket, user TokenBucket (if user_id provided),
         and acquires global_semaphore to enforce concurrency limit.
         """
@@ -649,7 +650,6 @@ class ResourceManager:
 
         # Try to acquire global semaphore (non-blocking)
         try:
-            self.global_semaphore.release() if self.global_semaphore.locked() else None
             await asyncio.wait_for(self.global_semaphore.acquire(), timeout=0.001)
         except (asyncio.TimeoutError, RuntimeError):
             # Could not acquire concurrency slot - refund tokens
@@ -661,6 +661,7 @@ class ResourceManager:
             return False
 
         # Record request in history for metrics
+        self._held_permits += 1
         self.request_history.append({"timestamp": time.time(), "tokens": tokens})
 
         return True
@@ -673,7 +674,7 @@ class ResourceManager:
     ) -> Optional[float]:
         """
         Queue a request when rate limits are exceeded (Requirement 12.4-12.5).
-        
+
         Returns:
             - None if request was queued successfully
             - retry_after (float seconds) if request was rejected (queue full)
@@ -707,15 +708,22 @@ class ResourceManager:
 
     def release_resources(self, provider: str, user_id: Optional[str] = None) -> None:
         """Release global concurrency slot after request completes."""
+        if self._held_permits <= 0:
+            logger.warning(
+                "release_resources called without balanced acquire (provider=%s) — semaphore permit NOT returned.",  # noqa: E501
+                provider,
+            )
+            return
         try:
             self.global_semaphore.release()
+            self._held_permits -= 1
         except RuntimeError:
             logger.warning("Attempted to release semaphore without holding it.")
 
     def get_resource_metrics(self) -> dict[str, Any]:
         """
         Return resource usage metrics (Requirement 12.7-12.8).
-        
+
         Returns:
             - requests_per_second: rolling average over 60 seconds
             - tokens_per_minute: rolling sum over 60 seconds
@@ -760,7 +768,7 @@ class ResourceManager:
     def adjust_limits_dynamic(self, provider: str, health_status: str) -> None:
         """
         Dynamically adjust rate limits based on provider health (Requirement 12.9).
-        
+
         Adjustments:
         - healthy: 100% of configured limit
         - degraded: 50% of configured limit
@@ -911,7 +919,7 @@ class AsyncAPIGateway:
 
         raise AllModelsExhaustedError(role=role, chain=chain, errors=errors)
 
-    async def _guarded_call(self, model: str, prompt: str, system_prompt: Optional[str] = None, history: list[dict[str, str]] | None = None) -> str:
+    async def _guarded_call(self, model: str, prompt: str, system_prompt: Optional[str] = None, history: list[dict[str, str]] | None = None) -> str:  # noqa: E501
         """
         Execute a single call using retry-with-backoff, semaphore, and jitter.
         """

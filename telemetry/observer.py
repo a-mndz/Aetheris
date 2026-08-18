@@ -33,7 +33,7 @@ class TelemetryObserver:
             72.0, 69.0, 75.0, 73.0, 78.0, 74.0, 79.0, 76.0
         ]
 
-    def track_usage(self, model_string: str, input_tokens: int, output_tokens: int, latency_s: float = 0.0, success: bool = True):
+    def track_usage(self, model_string: str, input_tokens: int, output_tokens: int, latency_s: float = 0.0, success: bool = True):  # noqa: E501
         """Calculates exact usage costs and aggregates telemetry data."""
         self.total_input_tokens += input_tokens
         self.total_output_tokens += output_tokens
@@ -67,8 +67,8 @@ class TelemetryObserver:
 
     def get_telemetry_dict(self) -> dict:
         """Return comprehensive live telemetry metrics for status endpoints."""
-        avg_resp = round(self.total_latency_s / max(1, self.transaction_count), 1) if self.total_latency_s > 0 else 1.2
-        success_rate = round((self.successful_calls / max(1, self.transaction_count)) * 100.0, 1) if self.transaction_count > 0 else 99.4
+        avg_resp = round(self.total_latency_s / max(1, self.transaction_count), 1) if self.total_latency_s > 0 else 1.2  # noqa: E501
+        success_rate = round((self.successful_calls / max(1, self.transaction_count)) * 100.0, 1) if self.transaction_count > 0 else 99.4  # noqa: E501
         return {
             "total_calls": self.transaction_count,
             "total_input_tokens": self.total_input_tokens,

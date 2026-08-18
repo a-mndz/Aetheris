@@ -11,11 +11,10 @@ from __future__ import annotations
 
 import logging
 import re
-import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from orchestrator.reasoning_graph import (
     EdgeType,
@@ -28,6 +27,45 @@ from orchestrator.reasoning_graph import (
 )
 
 logger = logging.getLogger(__name__)
+
+_STOP_WORDS: frozenset[str] = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "by",
+        "for",
+        "from",
+        "has",
+        "have",
+        "if",
+        "in",
+        "into",
+        "is",
+        "it",
+        "its",
+        "of",
+        "on",
+        "or",
+        "that",
+        "the",
+        "their",
+        "then",
+        "there",
+        "this",
+        "to",
+        "was",
+        "were",
+        "will",
+        "with",
+    }
+)
+
+_NEGATION_MARKERS: frozenset[str] = frozenset({"no", "not", "never", "without", "none", "cannot"})
 
 
 # ── Enums ──────────────────────────────────────────────────────────────────
@@ -60,6 +98,26 @@ class Claim:
     validation_status: ValidationStatus = ValidationStatus.PENDING
     provenance: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=_utc_now)
+
+
+@dataclass(frozen=True)
+class EvidenceRecord:
+    source_id: str
+    evidence_type: str
+    content: str
+    confidence: float = 1.0
+
+
+@dataclass
+class FirewallResult:
+    original_text: str
+    sanitized_text: str
+    claims: list[Claim] = field(default_factory=list)
+    unsupported_claims: list[Claim] = field(default_factory=list)
+
+    @property
+    def removed_or_qualified_count(self) -> int:
+        return len(self.unsupported_claims)
 
 
 # ── Claim Manager ──────────────────────────────────────────────────────────
@@ -165,23 +223,181 @@ class ClaimManager:
 
     # ── Validation ───────────────────────────────────────────────────
 
-    def validate_claim(self, claim: Claim) -> ValidationStatus:
+    def validate_claim(
+        self,
+        claim: Claim,
+        evidence: list[EvidenceRecord] | None = None,
+    ) -> ValidationStatus:
         """Validate a claim against available knowledge.
 
-        Phase 1 placeholder: returns ``UNVERIFIED`` with confidence < 0.5
-        for all claims.  Future: integrate Wikipedia API or a dedicated
-        fact-checking service.
+        Deterministic v1 firewall: validate a claim only against available
+        evidence in the current request context (conversation, prior agent
+        outputs, code/math snippets, or retrieved source text). Claims are
+        never self-validated from their own output.
         """
-        # Placeholder validation – all claims are unverified initially.
-        claim.validation_status = ValidationStatus.UNVERIFIED
-        claim.confidence = 0.3
+        evidence = evidence or []
+        claim_terms = self._keyword_set(claim.content)
+        claim_numbers = self._numbers(claim.content)
+        claim_negated = self._contains_negation(claim.content)
+        overlap_threshold = self._overlap_threshold(claim_terms)
+
+        matched: list[tuple[int, EvidenceRecord]] = []
+        contradicted = False
+
+        for record in evidence:
+            record_terms = self._keyword_set(record.content)
+            overlap = claim_terms & record_terms
+            if not overlap and claim.content.lower() not in record.content.lower():
+                continue
+
+            record_numbers = self._numbers(record.content)
+            if claim_numbers and not claim_numbers.issubset(record_numbers):
+                continue
+
+            if len(overlap) >= overlap_threshold or claim.content.lower() in record.content.lower():
+                matched.append((len(overlap), record))
+                if claim_negated != self._contains_negation(record.content):
+                    contradicted = True
+
+        matched.sort(key=lambda item: item[0], reverse=True)
+        supporting_evidence = [
+            {
+                "source_id": record.source_id,
+                "evidence_type": record.evidence_type,
+                "content": record.content[:240],
+                "confidence": record.confidence,
+                "overlap": overlap,
+            }
+            for overlap, record in matched[:3]
+        ]
+
+        existing_provenance = dict(claim.provenance)
+        existing_provenance.update(
+            {
+                "evidence": supporting_evidence,
+                "validation_method": "evidence_checker",
+            }
+        )
+        claim.provenance = existing_provenance
+
+        if supporting_evidence:
+            claim.validation_status = (
+                ValidationStatus.CONTRADICTED if contradicted else ValidationStatus.VERIFIED
+            )
+            claim.confidence = 0.2 if contradicted else 0.85
+        else:
+            claim.validation_status = ValidationStatus.UNVERIFIED
+            claim.confidence = 0.25
+
         logger.debug(
-            "Claim %s validated as UNVERIFIED (confidence=%.2f)",
+            "Claim %s validated as %s (confidence=%.2f)",
             claim.claim_id,
+            claim.validation_status.value,
             claim.confidence,
-            extra={"stage": "claims_manager", "claim_id": claim.claim_id, "confidence": claim.confidence, "status": "unverified"}
+            extra={
+                "stage": "claims_manager",
+                "claim_id": claim.claim_id,
+                "confidence": claim.confidence,
+                "status": claim.validation_status.value,
+            }
         )
         return claim.validation_status
+
+    def apply_firewall(
+        self,
+        text: str,
+        *,
+        agent_name: str,
+        evidence: list[EvidenceRecord] | None = None,
+    ) -> FirewallResult:
+        """Qualify unsupported claims before a response leaves the validation layer."""
+        if not text or not text.strip():
+            return FirewallResult(original_text=text, sanitized_text=text)
+
+        evidence = evidence or []
+        rebuilt_sentences: list[str] = []
+        claims: list[Claim] = []
+        unsupported_claims: list[Claim] = []
+
+        for sentence in self._split_sentences(text):
+            if not self._sentence_looks_like_claim(sentence):
+                rebuilt_sentences.append(sentence)
+                continue
+
+            claim = Claim(
+                claim_id=_generate_id(),
+                content=sentence,
+                claim_type=self.classify_claim_type(sentence),
+                confidence=0.5,
+                source_agent=agent_name,
+                validation_status=ValidationStatus.PENDING,
+            )
+            claims.append(claim)
+            status = self.validate_claim(claim, evidence)
+            if status == ValidationStatus.VERIFIED:
+                rebuilt_sentences.append(sentence)
+                continue
+
+            unsupported_claims.append(claim)
+            rebuilt_sentences.append(self._qualify_unsupported_claim(sentence, status))
+
+        sanitized_text = " ".join(part.strip() for part in rebuilt_sentences if part.strip())
+        return FirewallResult(
+            original_text=text,
+            sanitized_text=sanitized_text or text,
+            claims=claims,
+            unsupported_claims=unsupported_claims,
+        )
+
+    def build_evidence(
+        self,
+        *,
+        user_query: str | None = None,
+        history: list[Mapping[str, Any]] | None = None,
+        agent_outputs: Mapping[str, Any] | None = None,
+        prior_results: Mapping[str, Any] | None = None,
+    ) -> list[EvidenceRecord]:
+        """Build a request-scoped evidence pool from context and prior artifacts."""
+        evidence: list[EvidenceRecord] = []
+
+        if user_query and user_query.strip():
+            evidence.append(EvidenceRecord(source_id="user_query", evidence_type="source", content=user_query.strip()))  # noqa: E501
+
+        for index, message in enumerate(history or []):
+            content = self._coerce_text(message)
+            if content:
+                role = str(message.get("role", "history")) if isinstance(message, Mapping) else "history"
+                evidence.append(
+                    EvidenceRecord(
+                        source_id=f"history:{index}:{role}",
+                        evidence_type="context",
+                        content=content,
+                    )
+                )
+
+        for source_id, payload in (agent_outputs or {}).items():
+            content = self._coerce_text(payload)
+            if content:
+                evidence.append(
+                    EvidenceRecord(
+                        source_id=str(source_id),
+                        evidence_type=self._infer_evidence_type(str(source_id), content),
+                        content=content,
+                    )
+                )
+
+        for source_id, payload in (prior_results or {}).items():
+            content = self._coerce_text(payload)
+            if content:
+                evidence.append(
+                    EvidenceRecord(
+                        source_id=f"result:{source_id}",
+                        evidence_type=self._infer_evidence_type(str(source_id), content),
+                        content=content,
+                    )
+                )
+
+        return evidence
 
     # ── Storage ──────────────────────────────────────────────────────
 
@@ -228,7 +444,7 @@ class ClaimManager:
                     )
                     reasoning_graph.add_edge(edge)
 
-        logger.debug("Stored claim %s in reasoning graph as node %s", claim.claim_id, node_id, extra={"stage": "claims_manager", "claim_id": claim.claim_id, "node_id": node_id})
+        logger.debug("Stored claim %s in reasoning graph as node %s", claim.claim_id, node_id, extra={"stage": "claims_manager", "claim_id": claim.claim_id, "node_id": node_id})  # noqa: E501
         return node_id
 
     # ── Provenance ───────────────────────────────────────────────────
@@ -245,17 +461,19 @@ class ClaimManager:
         Provenance tracks where the claim came from, when it was
         extracted, and how it was validated.
         """
-        claim.provenance = {
+        existing = dict(claim.provenance)
+        existing.update({
             "source": source,
             "timestamp": timestamp.isoformat(),
             "validation_method": validation_method,
-        }
+        })
+        claim.provenance = existing
         logger.debug(
             "Tracked provenance for claim %s: source=%s method=%s",
             claim.claim_id,
             source,
             validation_method,
-            extra={"stage": "claims_manager", "claim_id": claim.claim_id, "source": source, "method": validation_method}
+            extra={"stage": "claims_manager", "claim_id": claim.claim_id, "source": source, "method": validation_method}  # noqa: E501
         )
 
     # ── Querying ─────────────────────────────────────────────────────
@@ -265,7 +483,7 @@ class ClaimManager:
         agent_name: Optional[str] = None,
         claims: Optional[list[Claim]] = None,
     ) -> list[Claim]:
-        """Return claims that have not yet been verified.
+        """Return claims that are not fully verified.
 
         If *agent_name* is provided, only claims from that agent are
         returned.  Pass an external *claims* list to search; otherwise
@@ -277,7 +495,7 @@ class ClaimManager:
 
         result = [
             c for c in claims
-            if c.validation_status == ValidationStatus.UNVERIFIED
+            if c.validation_status in {ValidationStatus.UNVERIFIED, ValidationStatus.CONTRADICTED}
         ]
         if agent_name:
             result = [c for c in result if c.source_agent == agent_name]
@@ -291,6 +509,68 @@ class ClaimManager:
         """Split *text* into sentences on period/question/exclamation marks."""
         parts = ClaimManager._SENTENCE_SPLITTER.split(text)
         return [p.strip() for p in parts if p.strip()]
+
+    @staticmethod
+    def _coerce_text(payload: Any) -> str:
+        if payload is None:
+            return ""
+        if isinstance(payload, str):
+            return payload.strip()
+        if isinstance(payload, Mapping):
+            for key in ("final_answer", "answer", "final_response", "objective", "content"):
+                value = payload.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        for attr in ("final_answer", "answer"):
+            value = getattr(payload, attr, None)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+
+    @staticmethod
+    def _keyword_set(text: str) -> set[str]:
+        return {
+            token
+            for token in re.findall(r"[A-Za-z0-9_]+", text.lower())
+            if len(token) > 2 and token not in _STOP_WORDS
+        }
+
+    @staticmethod
+    def _numbers(text: str) -> set[str]:
+        return set(re.findall(r"\b\d+(?:\.\d+)?\b", text))
+
+    @staticmethod
+    def _contains_negation(text: str) -> bool:
+        words = set(re.findall(r"[A-Za-z]+", text.lower()))
+        return bool(words & _NEGATION_MARKERS)
+
+    @staticmethod
+    def _overlap_threshold(keywords: set[str]) -> int:
+        if len(keywords) <= 2:
+            return 1
+        if len(keywords) <= 5:
+            return 2
+        return 3
+
+    @staticmethod
+    def _infer_evidence_type(source_id: str, content: str) -> str:
+        lowered = source_id.lower()
+        if "code" in lowered or "verify" in lowered or "test" in lowered or "```" in content:
+            return "code"
+        if any(symbol in content for symbol in ("=", "+", "-", "*", "/")) and any(ch.isdigit() for ch in content):  # noqa: E501
+            return "math"
+        if lowered.startswith("history") or lowered == "user_query":
+            return "context"
+        return "reasoning"
+
+    @staticmethod
+    def _qualify_unsupported_claim(sentence: str, status: ValidationStatus) -> str:
+        stripped = sentence.strip()
+        if status == ValidationStatus.CONTRADICTED:
+            reason = "available evidence conflicts with this claim"
+        else:
+            reason = "available evidence does not verify this claim"
+        return f"{stripped} [Qualifier: {reason}.]"
 
     @classmethod
     def _sentence_looks_like_claim(cls, sentence: str) -> bool:

@@ -149,3 +149,64 @@ class TelemetryEvent(Base):
     __table_args__ = (
         Index("ix_telemetry_stage_ts", "stage", "timestamp"),
     )
+
+
+class ExperienceOperationalRecord(Base):
+    """High-write / short-retention Experience DB row (RFC-004 §7.1, DEC-013).
+
+    Records per-request operational experience — prediction-vs-actual deltas,
+    latency, cost, and failure/recovery outcomes — with a default 7-day
+    retention.  Written through :class:`orchestrator.experience_db.ExperienceRepository`
+    only; no orchestration module talks to this table directly (invariant 8).
+    """
+
+    __tablename__ = "experience_operational"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    prompt_fingerprint: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    task_profile: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    prediction_actual_deltas: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    latency_ms: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    cost_usd: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    failure_class: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    recovery_action: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    replay_trace_id: Mapped[Optional[str]] = mapped_column(String(64), index=True, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_experience_operational_created", "created_at"),
+    )
+
+
+class ExperienceLearningRecord(Base):
+    """Read-heavy / long-retention Experience DB row (RFC-004 §7.2, DEC-013).
+
+    Records planner / consensus / routing quality signals and the graph
+    mutation audit for offline learning, with a default 90-day retention.  In
+    v1 this table is written but never used for live rerouting (DEC-005); the
+    ``pgvector`` semantic layer lights up against it in v2 (DEC-007).
+    """
+
+    __tablename__ = "experience_learning"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    prompt_fingerprint: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    task_profile: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    task_graph_fingerprint: Mapped[Optional[str]] = mapped_column(
+        String(64), index=True, nullable=True
+    )
+    planner_version: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    consensus_quality: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    routing_quality: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    user_satisfaction: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    graph_mutation_audit: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    replay_trace_id: Mapped[Optional[str]] = mapped_column(String(64), index=True, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_experience_learning_created", "created_at"),
+    )

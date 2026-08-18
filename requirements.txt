@@ -10,5 +10,12 @@ asyncpg>=0.29.0
 passlib[bcrypt]>=1.7.4
 python-jose[cryptography]>=3.3.0
 tiktoken>=0.5.0
-
+keyring>=25.0.0
+alembic>=1.13.0
+aiosqlite>=0.20.0
+# Experience DB (RFC-004 §7 / ADR-008). Testcontainers spins a disposable
+# PostgreSQL for the round-trip integration tests (§7.4). pgvector is installed
+# but UNUSED in v1 — it lights up in v2 against experience_learning (DEC-007).
+testcontainers[postgresql]>=4.0.0
+pgvector>=0.2.0
 

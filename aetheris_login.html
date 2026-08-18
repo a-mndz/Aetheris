@@ -727,6 +727,7 @@ form.addEventListener('submit', async (e) => {
   try {
     const response = await fetch(url, {
       method: 'POST',
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json'
       },
@@ -744,6 +745,7 @@ form.addEventListener('submit', async (e) => {
       
       const loginResponse = await fetch('/auth/login', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
       });
@@ -753,8 +755,6 @@ form.addEventListener('submit', async (e) => {
         throw new Error(loginData.detail || 'Login after registration failed');
       }
 
-      localStorage.setItem('access_token', loginData.access_token);
-      localStorage.setItem('user_email', email);
       submitBtn.classList.remove('loading');
       submitBtn.classList.add('success');
       
@@ -762,8 +762,6 @@ form.addEventListener('submit', async (e) => {
         window.location.href = '/';
       }, 1000);
     } else {
-      localStorage.setItem('access_token', data.access_token);
-      localStorage.setItem('user_email', email);
       submitBtn.classList.remove('loading');
       submitBtn.classList.add('success');
       

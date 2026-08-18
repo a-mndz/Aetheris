@@ -12,11 +12,11 @@ import json
 import logging
 from typing import Optional
 
-from core.schemas import aetherisOutput
 from agents.parser import parse_and_repair
 from agents.prompt_utils import assemble_synthesizer_prompt
-from api_gateway.strategy import ProviderStrategy
 from api_gateway.rate_limiter import AsyncAPIGateway, ProviderPool
+from api_gateway.strategy import ProviderStrategy
+from core.schemas import aetherisOutput
 
 logger = logging.getLogger("aetheris.Orchestrator.Evaluation")
 
@@ -97,7 +97,7 @@ Output strictly in raw JSON following the aetherisOutput schema layout:
   "disagreement_notes": ["Note 1", "Note 2"],
   "validation_score": 9.5
 }}
-"""
+"""  # noqa: E501
 
     logger.info("Calling Synthesizer validation judge...")
     system_prompt = assemble_synthesizer_prompt(strategy.mode.value)

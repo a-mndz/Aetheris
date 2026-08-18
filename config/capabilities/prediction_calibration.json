@@ -1,0 +1,38 @@
+{
+  "_meta": {
+    "owner": "RFC-003",
+    "reviewers": "Architecture",
+    "spec": "RFC-003 §3.6 — priors for the Prediction layer (expected cost/latency/tokens/confidence + probabilities). RFC-008 §2.3 — promotion is manual-PR only; the nightly `calibrate` CLI writes a *.proposed.json, never this file directly.",
+    "notes": "COLD-START PRIORS. calibration_confidence is deliberately low (0.2) because there is no Experience DB history yet; it rises as offline calibration accumulates evidence. ResourceManager checks against upper_bound (value + std_dev), so priors are conservative."
+  },
+  "version": "1",
+
+  "defaults": {
+    "expected_cost_usd":      { "value": 0.01,  "variance": 0.0001, "std_dev": 0.01,  "sample_size": 0 },
+    "expected_latency_ms":    { "value": 4000,  "variance": 2250000, "std_dev": 1500, "sample_size": 0 },
+    "expected_tokens":        { "value": 1200,  "variance": 250000, "std_dev": 500,   "sample_size": 0 },
+    "expected_confidence":    { "value": 0.70,  "variance": 0.01,   "std_dev": 0.10,  "sample_size": 0 },
+    "probability_of_failure": 0.05,
+    "probability_of_repair": 0.15,
+    "probability_of_retrieval_needed": 0.10,
+    "probability_of_clarification_needed": 0.05,
+    "probability_of_consensus_disagreement": 0.20,
+    "expected_repair_count": 0,
+    "calibration_confidence": 0.20
+  },
+
+  "by_complexity": {
+    "low":      { "expected_tokens_multiplier": 0.5, "expected_latency_multiplier": 0.5, "probability_of_repair": 0.05 },
+    "medium":   { "expected_tokens_multiplier": 1.0, "expected_latency_multiplier": 1.0, "probability_of_repair": 0.15 },
+    "high":     { "expected_tokens_multiplier": 2.0, "expected_latency_multiplier": 2.0, "probability_of_repair": 0.30 },
+    "critical": { "expected_tokens_multiplier": 3.5, "expected_latency_multiplier": 3.0, "probability_of_repair": 0.40 }
+  },
+
+  "by_task_type": {
+    "general":  { "probability_of_retrieval_needed": 0.10 },
+    "coding":   { "probability_of_retrieval_needed": 0.05, "probability_of_repair": 0.30 },
+    "research": { "probability_of_retrieval_needed": 0.90 },
+    "math":     { "probability_of_retrieval_needed": 0.05, "probability_of_consensus_disagreement": 0.30 },
+    "creative": { "probability_of_retrieval_needed": 0.05, "probability_of_consensus_disagreement": 0.35 }
+  }
+}

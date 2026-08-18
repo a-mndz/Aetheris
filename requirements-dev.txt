@@ -1,0 +1,6 @@
+# Development and CI dependencies (Phase 8).
+# Install with: pip install -r requirements.txt -r requirements-dev.txt
+# Pins match the verified local toolchain; bump deliberately.
+pytest==8.4.1
+pytest-asyncio==1.3.0
+ruff==0.15.20

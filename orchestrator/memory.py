@@ -9,7 +9,7 @@ can avoid repeating the same mistakes.
 from __future__ import annotations
 
 from collections import deque
-from typing import List, Dict
+from typing import Dict, List
 
 
 class EpistemicMemory:
@@ -57,7 +57,7 @@ class EpistemicMemory:
 
         compiled = ["HISTORICAL MISTAKES IDENTIFIED IN PREVIOUS ATTEMPTS:"]
         for idx, item in enumerate(matching_failures, 1):
-            compiled.append(f"{idx}. Loop failure score {item['score']}: Error explanation: {item['explanation']}")
+            compiled.append(f"{idx}. Loop failure score {item['score']}: Error explanation: {item['explanation']}")  # noqa: E501
         return "\n".join(compiled)
 
     def reset(self) -> None:

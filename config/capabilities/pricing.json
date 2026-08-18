@@ -1,0 +1,24 @@
+{
+  "_meta": {
+    "owner": "RFC-002",
+    "reviewers": "Finance + Architecture",
+    "spec": "RFC-002 §5 — feeds expected_cost prediction (RFC-003 §3.6) and pricing-aware model selection.",
+    "notes": "Prices are USD per 1,000,000 tokens, split input/output. SEED ESTIMATES ONLY — VERIFY against live provider price sheets before trusting cost telemetry. FREE-tier routes (google/*, github/*, groq/*) are priced 0.0 as community/open-weight per StrategyMode.FREE.",
+    "unit": "usd_per_million_tokens"
+  },
+  "version": "1",
+  "models": {
+    "google/gemini-2.5-flash":                { "input": 0.0,  "output": 0.0 },
+    "google/gemini-2.5-pro":                  { "input": 0.0,  "output": 0.0 },
+    "github/meta-llama-3.1-70b-instruct":     { "input": 0.0,  "output": 0.0 },
+    "groq/llama-3.3-70b-versatile":           { "input": 0.0,  "output": 0.0 },
+    "groq/llama-3.1-8b-instant":              { "input": 0.0,  "output": 0.0 },
+    "unli/deepseek-chat":                     { "input": 0.14, "output": 0.28 },
+    "unli/gpt-4o-mini":                       { "input": 0.15, "output": 0.60 },
+    "unli/gpt-4o":                            { "input": 2.50, "output": 10.00 },
+    "openai/gpt-4o-mini":                     { "input": 0.15, "output": 0.60 },
+    "openai/gpt-4o":                          { "input": 2.50, "output": 10.00 },
+    "openrouter/anthropic/claude-3.5-sonnet": { "input": 3.00, "output": 15.00 }
+  },
+  "default": { "input": 1.00, "output": 3.00 }
+}

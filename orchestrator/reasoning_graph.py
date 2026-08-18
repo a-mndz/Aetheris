@@ -92,7 +92,7 @@ class ReasoningGraph:
     def add_node(self, node: GraphNode) -> str:
         """Add a node to the graph, return its node_id."""
         self._nodes[node.node_id] = node
-        logger.debug("Added node to reasoning graph: %s", node.node_id, extra={"stage": "reasoning_graph", "node_id": node.node_id, "node_type": node.node_type.value})
+        logger.debug("Added node to reasoning graph: %s", node.node_id, extra={"stage": "reasoning_graph", "node_id": node.node_id, "node_type": node.node_type.value})  # noqa: E501
         return node.node_id
 
     def get_node(self, node_id: str) -> Optional[GraphNode]:
@@ -108,7 +108,7 @@ class ReasoningGraph:
             edge.source_id,
             edge.target_id,
             edge.edge_type.value,
-            extra={"stage": "reasoning_graph", "source_id": edge.source_id, "target_id": edge.target_id, "edge_type": edge.edge_type.value}
+            extra={"stage": "reasoning_graph", "source_id": edge.source_id, "target_id": edge.target_id, "edge_type": edge.edge_type.value}  # noqa: E501
         )
 
     def get_edges_from(self, node_id: str) -> list[GraphEdge]:
@@ -224,7 +224,7 @@ class ReasoningGraph:
         """Compute cosine similarity between two vectors."""
         if len(a) != len(b) or len(a) == 0:
             return 0.0
-        dot = sum(x * y for x, y in zip(a, b))
+        dot = sum(x * y for x, y in zip(a, b, strict=False))
         norm_a = math.sqrt(sum(x * x for x in a))
         norm_b = math.sqrt(sum(x * x for x in b))
         if norm_a == 0.0 or norm_b == 0.0:

@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from typing import Any, AsyncGenerator, TypedDict
 
@@ -24,8 +25,15 @@ from api_gateway.strategy import ProviderStrategy
 from core.passport import ExecutionPassport
 from core.schemas import AgentOutput
 from core.security import SecurityValidationError
+from orchestrator.claims import ClaimManager
 from orchestrator.evaluation import arbitrate_and_synthesize
+from orchestrator.feature_flags import FeatureFlags, load_flags
+from orchestrator.knowledge_layer import KnowledgeLayer
 from orchestrator.memory import epistemic_memory
+from orchestrator.reasoning_layer import ReasoningLayer
+from orchestrator.retrieval import RetrievalService, load_route_gating, load_routing_weights
+from orchestrator.routing import IntentAnalyzer
+from orchestrator.validation_layer import ValidationLayer
 
 logger = logging.getLogger(__name__)
 
@@ -38,15 +46,14 @@ _DISABLE_CLAIMS_ENV = "aetheris_DISABLE_CLAIM_EXTRACTION"
 
 
 def _is_claim_extraction_enabled() -> bool:
-    """Toggle for the no-op claim extraction loop (HIGH-019).
+    """Emergency bypass for the hallucination firewall.
 
-    HIGH-019 audit finding: ``validate_claim`` always returns UNVERIFIED with
-    confidence 0.3, so the entire claim extraction/dispatch/storage block ran
-    for 50-200ms per request with no behavioural value.  Disabling by default
-    eliminates the no-op work without changing pipeline semantics.  Operators
-    may re-enable when an alternative validator ships.
+    Step 14 upgrades claim validation from a placeholder to a deterministic
+    evidence checker, so the firewall is enabled by default. Operators may use
+    the existing env var as an emergency kill switch if validation itself is
+    implicated in an incident.
     """
-    raw = os.environ.get(_DISABLE_CLAIMS_ENV, "1").strip().lower()
+    raw = os.environ.get(_DISABLE_CLAIMS_ENV, "0").strip().lower()
     return raw not in {"1", "true", "yes", "on"}
 
 
@@ -76,7 +83,9 @@ class MicroModeResult(TypedDict, total=False):
     logician_output: AgentOutput | dict[str, Any] | None
     creative_output: AgentOutput | dict[str, Any] | None
     unverified_claims: list[dict[str, Any]]
+    firewall_result: dict[str, Any] | None
     conversation_metadata: dict[str, Any] | None
+    passport: dict[str, Any] | None
 
 
 # ── Knowledge-Absence Detection ─────────────────────────────────────────
@@ -142,6 +151,7 @@ async def run_micro_mode(
     streaming_manager: Any | None = None,
     conversation_director: Any | None = None,
     session_id: str | None = None,
+    flags: FeatureFlags | None = None,
 ) -> MicroModeResult:
     """
     Execute the **micro-mode** pipeline.
@@ -152,11 +162,14 @@ async def run_micro_mode(
     tracks the request lifecycle across all components.
     """
     logger.info("Micro-mode pipeline started for query: %.120s", user_query)
+    claim_manager = claim_manager or ClaimManager()
 
     # ── Conversation context (Task 21.5) ────────────────────────────
-    history, conversation_metadata = init_conversation_context(
+    stored_history, conversation_metadata = init_conversation_context(
         conversation_director, session_id, logger
     )
+    if stored_history:
+        history = stored_history
     record_user_query(conversation_director, session_id, user_query, logger)
 
     # Track start time for passport timeout enforcement
@@ -178,6 +191,8 @@ async def run_micro_mode(
             streaming_manager=streaming_manager,
             conversation_director=conversation_director,
             session_id=session_id,
+            conversation_metadata=conversation_metadata,
+            flags=flags,
         )
 
     # CRIT-001 repair: the DecisionEngine path is the sole execution path.
@@ -415,57 +430,49 @@ async def run_micro_mode(
 
     confidence_delta = _calculate_confidence_delta(logician_agent, creative_agent)
 
-    # ── Claim extraction (legacy path) ──────────────────────────────
-    all_claims: list[Any] = []
-    if claim_manager is not None and _is_claim_extraction_enabled():
-        from datetime import datetime as _dt
-
-        for agent_name, agent_output in [
+    all_claims = _process_claims_for_outputs(
+        claim_manager=claim_manager,
+        outputs=[
             ("breaker", breaker_output),
             ("logician", logician_output),
             ("creative", creative_output),
             ("judge", final_output),
-        ]:
-            answer_text = ""
-            if agent_output is not None:
-                if hasattr(agent_output, "answer"):
-                    answer_text = agent_output.answer
-                elif isinstance(agent_output, dict):
-                    answer_text = agent_output.get("answer", "")
-            if answer_text:
-                extracted = claim_manager.extract_claims(answer_text, agent_name)
-                for claim in extracted:
-                    claim_manager.validate_claim(claim)
-                    if reasoning_graph is not None:
-                        claim_manager.store_claim(claim, reasoning_graph)
-                    claim_manager.track_claim_provenance(
-                        claim,
-                        source=agent_name,
-                        timestamp=_dt.utcnow(),
-                        validation_method="regex_extraction",
-                    )
-                all_claims.extend(extracted)
+        ],
+        user_query=user_query,
+        history=history,
+        reasoning_graph=reasoning_graph,
+    )
+    final_answer, unverified_dicts, firewall_result = _apply_output_firewall(
+        claim_manager=claim_manager,
+        final_text=final_output.final_answer,
+        user_query=user_query,
+        history=history,
+        agent_outputs={
+            "breaker": breaker_output,
+            "logician": logician_output,
+            "creative": creative_output,
+            "judge": final_output,
+        },
+        reasoning_graph=reasoning_graph,
+    )
+    final_output.final_answer = final_answer
 
-    unverified = claim_manager.get_unverified_claims(
-        claims=all_claims,
-    ) if claim_manager is not None else []
+    unverified = claim_manager.get_unverified_claims(claims=all_claims)
+    seen_claim_ids = {entry["claim_id"] for entry in unverified_dicts}
+    for claim in unverified:
+        if claim.claim_id not in seen_claim_ids:
+            unverified_dicts.append(_claim_dict(claim))
+            seen_claim_ids.add(claim.claim_id)
 
     if unverified and passport is not None:
         for c in unverified:
             passport.record_warning(
                 f"Unverified claim from {c.source_agent}: {c.content[:100]}"
             )
-
-    unverified_dicts = [
-        {
-            "claim_id": c.claim_id,
-            "content": c.content,
-            "claim_type": c.claim_type.value,
-            "confidence": c.confidence,
-            "source_agent": c.source_agent,
-        }
-        for c in unverified
-    ]
+    if firewall_result is not None and firewall_result["removed_or_qualified_count"] > 0:
+        final_output.disagreement_notes.append(
+            f"Hallucination firewall qualified {firewall_result['removed_or_qualified_count']} unsupported claim(s)."  # noqa: E501
+        )
 
     # ── Conversation completion (Task 21.5, legacy path) ─────────────
     conversation_metadata = complete_conversation_session(
@@ -481,287 +488,9 @@ async def run_micro_mode(
         logician_output=logician_output,
         creative_output=creative_output,
         unverified_claims=unverified_dicts,
+        firewall_result=firewall_result,
         conversation_metadata=conversation_metadata,
     )
-
-
-async def stream_micro_mode(
-    user_query: str,
-    gateway: AsyncAPIGateway,
-    strategy: ProviderStrategy,
-    pool: ProviderPool,
-    history: list[dict[str, str]] | None = None,
-) -> AsyncGenerator[dict[str, Any], None]:
-    """
-    Streaming variant of :func:`run_micro_mode`.
-
-    Yields granular per-agent SSE events so the frontend can render
-    real-time progress for each agent independently.
-
-    Event types emitted:
-        agent_started, progress, reasoning_summary, draft_answer,
-        agent_completed, error, result
-    """
-    logger.info("Streaming micro-mode pipeline started for query: %.120s", user_query)
-
-    # ── Helper: serialise an AgentOutput (or dict) for the wire ──────
-    def _serialise(obj: Any) -> dict[str, Any]:
-        if hasattr(obj, "model_dump"):
-            return obj.model_dump()
-        return obj if isinstance(obj, dict) else {}
-
-    # ── Helper: extract confidence label from a parsed agent output ──
-    def _confidence_label(agent_out: AgentOutput | dict[str, Any]) -> str:
-        if isinstance(agent_out, AgentOutput):
-            c = agent_out.confidence
-        else:
-            c = agent_out.get("confidence", 0.0)
-        if c >= 0.75:
-            return "High"
-        if c >= 0.4:
-            return "Medium"
-        return "Low"
-
-    # Assemble layered system prompts
-    prompts = assemble_generation_prompts(strategy.mode.value)
-    breaker_sys = prompts["breaker"]
-    logician_sys = prompts["logician"]
-    creative_sys = prompts["creative"]
-
-    # ── Step 1: Breaker gate ─────────────────────────────────────────
-    yield {"event": "agent_started", "agent": "Breaker"}
-    yield {"event": "progress", "agent": "Breaker", "step": 1, "total_steps": 3, "message": "Reading request..."}
-    yield {"event": "progress", "agent": "Breaker", "step": 2, "total_steps": 3, "message": "Checking knowledge context..."}
-
-    try:
-        breaker_raw = await gateway.execute_with_fallback(
-            prompt=user_query,
-            system_prompt=breaker_sys,
-            role="breaker",
-            strategy=strategy,
-            pool=pool,
-            history=history,
-        )
-    except Exception as exc:
-        logger.error("Breaker gate call failed: %s: %s", type(exc).__name__, exc)
-        yield {
-            "event": "error",
-            "stage": "breaker",
-            "agent": "Breaker",
-            "message": f"Pipeline error at Breaker gate: {exc}",
-        }
-        return
-
-    breaker_output = parse_and_repair(breaker_raw, AgentOutput)
-
-    if _is_knowledge_absent(breaker_output):
-        reason = (
-            breaker_output.answer
-            if isinstance(breaker_output, AgentOutput)
-            else breaker_output.get("answer", "Unknown parse failure")
-        )
-        logger.warning("Breaker gate ABORTED pipeline: %s", reason)
-        yield {"event": "agent_completed", "agent": "Breaker", "confidence": "Low", "final_answer": reason, "status": "aborted"}
-        yield {
-            "event": "result",
-            "payload": _build_frontend_payload(
-                MicroModeResult(
-                    status="aborted",
-                    winning_answer=reason,
-                    validation_score=0.0,
-                    confidence_delta=0.0,
-                    judge_decision=None,
-                    logician_output=None,
-                    creative_output=None,
-                )
-            ),
-        }
-        return
-
-    yield {"event": "progress", "agent": "Breaker", "step": 3, "total_steps": 3, "message": "Context verified"}
-    breaker_data = _serialise(breaker_output)
-    yield {
-        "event": "reasoning_summary",
-        "agent": "Breaker",
-        "section": "Evidence Used",
-        "content": breaker_data.get("reasoning_steps", []),
-    }
-    yield {"event": "agent_completed", "agent": "Breaker", "confidence": _confidence_label(breaker_output), "final_answer": breaker_data.get("answer", "")}
-    logger.info("Breaker gate passed — proceeding to generation.")
-
-    # ── Step 2: Concurrent Logician + Creative generation ────────────
-    yield {"event": "agent_started", "agent": "Logician"}
-    yield {"event": "agent_started", "agent": "Creative"}
-    yield {"event": "progress", "agent": "Logician", "step": 1, "total_steps": 4, "message": "Decomposing premises..."}
-    yield {"event": "progress", "agent": "Creative", "step": 1, "total_steps": 4, "message": "Reframing question..."}
-
-    # Use an asyncio.Queue so we can yield events as each agent finishes
-    agent_queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
-
-    async def _run_agent(name: str, system_prompt: str) -> None:
-        """Execute a single generation agent and push result onto the queue."""
-        try:
-            result = await gateway.execute_with_fallback(
-                prompt=user_query,
-                system_prompt=system_prompt,
-                role="generation",
-                strategy=strategy,
-                pool=pool,
-                history=history,
-            )
-            await agent_queue.put((name, result))
-        except Exception as exc:
-            await agent_queue.put((name, exc))
-
-    logician_task = asyncio.create_task(_run_agent("Logician", logician_sys))
-    creative_task = asyncio.create_task(_run_agent("Creative", creative_sys))
-
-    # Collect results as they arrive
-    agent_results: dict[str, Any] = {}
-    for _ in range(2):
-        name, result = await agent_queue.get()
-        if isinstance(result, BaseException):
-            logger.error("%s generation failed: %s", name, result)
-            yield {
-                "event": "error",
-                "stage": "agents",
-                "agent": name,
-                "message": f"{name} generation failed: {result}",
-            }
-            # Cancel the other task and bail out
-            logician_task.cancel()
-            creative_task.cancel()
-            return
-
-        agent_results[name] = result
-        step_num = 3  # post-LLM processing step
-        yield {"event": "progress", "agent": name, "step": step_num, "total_steps": 4, "message": "Parsing response..."}
-
-        parsed = parse_and_repair(result, AgentOutput)
-        agent_out = _ensure_agent_output(parsed, name)
-        agent_results[f"{name}_parsed"] = parsed
-        agent_results[f"{name}_agent"] = agent_out
-        data = _serialise(parsed)
-
-        yield {
-            "event": "reasoning_summary",
-            "agent": name,
-            "section": "Evidence Used",
-            "content": data.get("reasoning_steps", []),
-        }
-        yield {"event": "draft_answer", "agent": name, "content": data.get("answer", "")}
-        yield {"event": "progress", "agent": name, "step": 4, "total_steps": 4, "message": "Analysis complete"}
-        yield {
-            "event": "agent_completed",
-            "agent": name,
-            "confidence": _confidence_label(parsed),
-            "final_answer": data.get("answer", ""),
-        }
-
-    logician_output = agent_results["Logician_parsed"]
-    creative_output = agent_results["Creative_parsed"]
-    logician_agent = agent_results["Logician_agent"]
-    creative_agent = agent_results["Creative_agent"]
-
-    # Guard: if both agents produced error sentinels, skip the judge.
-    if logician_agent.answer.startswith("ERROR:") and creative_agent.answer.startswith("ERROR:"):
-        logger.error("Both agent outputs are parse-failure sentinels — skipping judge.")
-        yield {
-            "event": "error",
-            "stage": "agents",
-            "message": "Both generation agents failed to produce valid output.",
-        }
-        return
-
-    # ── Step 3: Validation & Synthesis Judge ──────────────────────────
-    yield {"event": "agent_started", "agent": "Judge"}
-    yield {"event": "progress", "agent": "Judge", "step": 1, "total_steps": 4, "message": "Comparing outputs..."}
-    yield {"event": "progress", "agent": "Judge", "step": 2, "total_steps": 4, "message": "Evaluating evidence..."}
-
-    lessons = epistemic_memory.get_lessons_learned(user_query)
-
-    try:
-        final_output = await arbitrate_and_synthesize(
-            query=user_query,
-            answer_a=logician_agent.answer,
-            answer_b=creative_agent.answer,
-            gateway=gateway,
-            strategy=strategy,
-            pool=pool,
-            lessons=lessons,
-            history=history,
-        )
-    except Exception as exc:
-        logger.error("Synthesis judge failed: %s", exc)
-        yield {
-            "event": "error",
-            "stage": "judge",
-            "agent": "Judge",
-            "message": f"Logic judge evaluation failed: {exc}",
-        }
-        return
-
-    if isinstance(final_output, dict):
-        logger.error("Judge output parse failure: %s", final_output)
-        yield {
-            "event": "error",
-            "stage": "judge",
-            "agent": "Judge",
-            "message": f"Judge output unparseable: {final_output.get('answer', 'unknown')}",
-        }
-        return
-
-    yield {"event": "progress", "agent": "Judge", "step": 3, "total_steps": 4, "message": "Synthesizing verdict..."}
-
-    # Stateful failure tracking
-    if final_output.validation_score < 7.0:
-        logger.warning(
-            "Low validation score (%f) detected. Recording failure pattern.",
-            final_output.validation_score,
-        )
-        epistemic_memory.record_failure(
-            query=user_query,
-            explanation=", ".join(final_output.disagreement_notes) or "Low validation score.",
-            score=final_output.validation_score,
-        )
-
-    yield {
-        "event": "reasoning_summary",
-        "agent": "Judge",
-        "section": "Verdict",
-        "content": final_output.disagreement_notes if final_output.disagreement_notes else ["No disagreements identified"],
-    }
-    yield {"event": "draft_answer", "agent": "Judge", "content": final_output.final_answer}
-    yield {"event": "progress", "agent": "Judge", "step": 4, "total_steps": 4, "message": "Judgment complete"}
-    yield {
-        "event": "agent_completed",
-        "agent": "Judge",
-        "confidence": final_output.overall_confidence,
-        "final_answer": final_output.final_answer,
-    }
-
-    # ── Step 4: Assemble result ──────────────────────────────────────
-    decision_dict = build_decision_dict(
-        logician_agent.confidence,
-        creative_agent.confidence,
-        final_output.overall_confidence,
-        final_output.overall_bias_risk,
-        final_output.disagreement_notes,
-    )
-
-    confidence_delta = _calculate_confidence_delta(logician_agent, creative_agent)
-
-    result = MicroModeResult(
-        status="success",
-        winning_answer=final_output.final_answer,
-        validation_score=final_output.validation_score,
-        confidence_delta=confidence_delta,
-        judge_decision=decision_dict,
-        logician_output=logician_output,
-        creative_output=creative_output,
-    )
-
-    yield {"event": "result", "payload": _build_frontend_payload(result)}
 
 
 def _build_frontend_payload(result: MicroModeResult) -> dict[str, Any]:
@@ -799,6 +528,7 @@ def _build_frontend_payload(result: MicroModeResult) -> dict[str, Any]:
             "logician": serialized.get("logician_output"),
             "creative": serialized.get("creative_output"),
         },
+        "metrics": serialized.get("passport"),
     }
 
 
@@ -833,6 +563,111 @@ def _calculate_confidence_delta(
     return abs(logician_agent.confidence - creative_agent.confidence)
 
 
+def _claim_dict(claim: Any) -> dict[str, Any]:
+    provenance = getattr(claim, "provenance", {}) or {}
+    return {
+        "claim_id": claim.claim_id,
+        "content": claim.content,
+        "claim_type": claim.claim_type.value,
+        "confidence": claim.confidence,
+        "source_agent": claim.source_agent,
+        "validation_status": claim.validation_status.value,
+        "evidence": provenance.get("evidence", []),
+    }
+
+
+def _process_claims_for_outputs(
+    *,
+    claim_manager: ClaimManager,
+    outputs: list[tuple[str, Any]],
+    user_query: str,
+    history: list[dict[str, str]] | None,
+    reasoning_graph: Any | None,
+) -> list[Any]:
+    if not _is_claim_extraction_enabled():
+        return []
+
+    evidence = claim_manager.build_evidence(
+        user_query=user_query,
+        history=history,
+        agent_outputs={
+            agent_name: agent_output
+            for agent_name, agent_output in outputs
+            if agent_output is not None
+        },
+    )
+    all_claims: list[Any] = []
+    timestamp = datetime.now(timezone.utc)
+
+    for agent_name, agent_output in outputs:
+        answer_text = ""
+        if agent_output is not None:
+            if hasattr(agent_output, "answer"):
+                answer_text = agent_output.answer
+            elif isinstance(agent_output, dict):
+                answer_text = agent_output.get("answer", "")
+        if not answer_text:
+            continue
+        extracted = claim_manager.extract_claims(answer_text, agent_name)
+        for claim in extracted:
+            supporting_evidence = [record for record in evidence if record.source_id != agent_name]
+            claim_manager.validate_claim(claim, supporting_evidence)
+            if reasoning_graph is not None:
+                claim_manager.store_claim(claim, reasoning_graph)
+            claim_manager.track_claim_provenance(
+                claim,
+                source=agent_name,
+                timestamp=timestamp,
+                validation_method="evidence_checker",
+            )
+        all_claims.extend(extracted)
+
+    return all_claims
+
+
+def _apply_output_firewall(
+    *,
+    claim_manager: ClaimManager,
+    final_text: str,
+    user_query: str,
+    history: list[dict[str, str]] | None,
+    agent_outputs: dict[str, Any],
+    reasoning_graph: Any | None,
+) -> tuple[str, list[dict[str, Any]], dict[str, Any] | None]:
+    if not _is_claim_extraction_enabled():
+        return final_text, [], None
+
+    evidence = claim_manager.build_evidence(
+        user_query=user_query,
+        history=history,
+        agent_outputs=agent_outputs,
+    )
+    firewall_result = claim_manager.apply_firewall(
+        final_text,
+        agent_name="judge",
+        evidence=[record for record in evidence if record.source_id != "judge"],
+    )
+    timestamp = datetime.now(timezone.utc)
+    for claim in firewall_result.claims:
+        if reasoning_graph is not None:
+            claim_manager.store_claim(claim, reasoning_graph)
+        claim_manager.track_claim_provenance(
+            claim,
+            source=claim.source_agent,
+            timestamp=timestamp,
+            validation_method="evidence_checker",
+        )
+
+    unsupported = claim_manager.get_unverified_claims(claims=firewall_result.claims)
+    result_payload = {
+        "original_text": firewall_result.original_text,
+        "sanitized_text": firewall_result.sanitized_text,
+        "removed_or_qualified_count": firewall_result.removed_or_qualified_count,
+        "unsupported_claims": [_claim_dict(claim) for claim in unsupported],
+    }
+    return firewall_result.sanitized_text, [_claim_dict(claim) for claim in unsupported], result_payload
+
+
 # ── Decision-Engine Pipeline Path (Task 21.3) ────────────────────────────
 
 
@@ -850,6 +685,8 @@ async def _run_with_decision_engine(
     streaming_manager: Any | None,
     conversation_director: Any | None = None,
     session_id: str | None = None,
+    conversation_metadata: dict[str, Any] | None = None,
+    flags: FeatureFlags | None = None,
 ) -> MicroModeResult:
     """Execute the pipeline using the :class:`DecisionEngine` gate architecture.
 
@@ -858,12 +695,29 @@ async def _run_with_decision_engine(
     state via the ExecutionPassport.
     """
     from orchestrator.streaming import EventType, StreamEvent
+    claim_manager = claim_manager or ClaimManager()
 
-    # ── Conversation context (Task 21.5) ────────────────────────────
-    history, conversation_metadata = init_conversation_context(
-        conversation_director, session_id, logger
-    )
-    record_user_query(conversation_director, session_id, user_query, logger)
+    flags = flags or load_flags()
+    knowledge = None
+    reasoning_layer = None
+    validation_layer = None
+    layer_history = history
+    if flags.knowledge_layer:
+        retrieval_service = None
+        if flags.rag:
+            retrieval_service = RetrievalService(
+                weights=load_routing_weights(),
+                route_gating=load_route_gating(),
+            )
+        knowledge = await KnowledgeLayer(retrieval_service).gather(
+            query=user_query,
+            task_profile=IntentAnalyzer.classify(user_query),
+            history=history,
+            reasoning_graph=reasoning_graph,
+        )
+        reasoning_layer = ReasoningLayer(decision_engine)
+        validation_layer = ValidationLayer(claim_manager)
+        layer_history = knowledge.reasoning_history()
 
     # ── Step 1: Breaker gate ─────────────────────────────────────────
     logger.info("Step 1/4 — Breaker gate (DecisionEngine, timeout=%dms).",
@@ -879,14 +733,23 @@ async def _run_with_decision_engine(
             {"agent_name": "Breaker", "request_id": passport.request_id},
         )
 
-    should_continue, breaker_output = await decision_engine.execute_breaker_gate(
-        query=user_query,
-        gateway=gateway,
-        strategy=strategy,
-        pool=pool,
-        passport=passport or _null_passport(),
-        history=history,
-    )
+    if reasoning_layer is not None and knowledge is not None:
+        should_continue, breaker_output = await reasoning_layer.run_breaker(
+            knowledge=knowledge,
+            gateway=gateway,
+            strategy=strategy,
+            pool=pool,
+            passport=passport or _null_passport(),
+        )
+    else:
+        should_continue, breaker_output = await decision_engine.execute_breaker_gate(
+            query=user_query,
+            gateway=gateway,
+            strategy=strategy,
+            pool=pool,
+            passport=passport or _null_passport(),
+            history=history,
+        )
 
     if passport is not None and breaker_output is not None:
         passport.add_agent_output("breaker", breaker_output)
@@ -920,6 +783,7 @@ async def _run_with_decision_engine(
             logician_output=None,
             creative_output=None,
             conversation_metadata=conversation_metadata,
+            passport=passport.to_dict() if passport is not None else None,
         )
 
     logger.info("Breaker gate passed — proceeding to generation.")
@@ -943,14 +807,23 @@ async def _run_with_decision_engine(
             {"agent_name": "Creative", "request_id": passport.request_id},
         )
 
-    logician_output, creative_output = await decision_engine.execute_generation_agents(
-        query=user_query,
-        gateway=gateway,
-        strategy=strategy,
-        pool=pool,
-        passport=passport or _null_passport(),
-        history=history,
-    )
+    if reasoning_layer is not None and knowledge is not None:
+        logician_output, creative_output = await reasoning_layer.generate(
+            knowledge=knowledge,
+            gateway=gateway,
+            strategy=strategy,
+            pool=pool,
+            passport=passport or _null_passport(),
+        )
+    else:
+        logician_output, creative_output = await decision_engine.execute_generation_agents(
+            query=user_query,
+            gateway=gateway,
+            strategy=strategy,
+            pool=pool,
+            passport=passport or _null_passport(),
+            history=history,
+        )
 
     # Track agent outputs in passport
     if passport is not None:
@@ -986,6 +859,7 @@ async def _run_with_decision_engine(
             logician_output=None,
             creative_output=None,
             conversation_metadata=conversation_metadata,
+            passport=passport.to_dict() if passport is not None else None,
         )
 
     # ── Step 3: Judge synthesis ──────────────────────────────────────
@@ -995,27 +869,24 @@ async def _run_with_decision_engine(
         passport.update_stage("evaluating")
 
     # Retrieve failure patterns from reasoning graph
-    lessons = ""
-    if reasoning_graph is not None:
-        patterns = reasoning_graph.get_failure_patterns(user_query)
-        if patterns:
-            lesson_parts = [
-                f"Past failure for similar query: {p.get('explanation', '')} "
-                f"(score={p.get('score', 0.0)})"
-                for p in patterns[:3]
-            ]
-            lessons = "; ".join(lesson_parts)
-            logger.info(
-                "Retrieved %d failure pattern(s) from reasoning graph.",
-                len(patterns),
-            )
-
-    # Also check epistemic memory for additional lessons
-    from orchestrator.memory import epistemic_memory
-
-    em_lessons = epistemic_memory.get_lessons_learned(user_query)
-    if em_lessons:
-        lessons = f"{lessons}; {em_lessons}" if lessons else em_lessons
+    lessons = knowledge.lessons if knowledge is not None else ""
+    if knowledge is None:
+        if reasoning_graph is not None:
+            patterns = reasoning_graph.get_failure_patterns(user_query)
+            if patterns:
+                lesson_parts = [
+                    f"Past failure for similar query: {p.get('explanation', '')} "
+                    f"(score={p.get('score', 0.0)})"
+                    for p in patterns[:3]
+                ]
+                lessons = "; ".join(lesson_parts)
+                logger.info(
+                    "Retrieved %d failure pattern(s) from reasoning graph.",
+                    len(patterns),
+                )
+        em_lessons = epistemic_memory.get_lessons_learned(user_query)
+        if em_lessons:
+            lessons = f"{lessons}; {em_lessons}" if lessons else em_lessons
 
     if streaming_manager is not None and passport is not None:
         await streaming_manager.emit(
@@ -1024,17 +895,29 @@ async def _run_with_decision_engine(
             {"agent_name": "Judge", "request_id": passport.request_id},
         )
 
-    final_output = await decision_engine.execute_judge_synthesis(
-        query=user_query,
-        logician_output=logician_output,
-        creative_output=creative_output,
-        gateway=gateway,
-        strategy=strategy,
-        pool=pool,
-        passport=passport or _null_passport(),
-        lessons=lessons,
-        history=history,
-    )
+    if validation_layer is not None and knowledge is not None:
+        final_output = await validation_layer.judge(
+            decision_engine=decision_engine,
+            knowledge=knowledge,
+            logician_output=logician_output,
+            creative_output=creative_output,
+            gateway=gateway,
+            strategy=strategy,
+            pool=pool,
+            passport=passport or _null_passport(),
+        )
+    else:
+        final_output = await decision_engine.execute_judge_synthesis(
+            query=user_query,
+            logician_output=logician_output,
+            creative_output=creative_output,
+            gateway=gateway,
+            strategy=strategy,
+            pool=pool,
+            passport=passport or _null_passport(),
+            lessons=lessons,
+            history=history,
+        )
 
     if passport is not None:
         passport.add_agent_output("judge", final_output)
@@ -1111,57 +994,63 @@ async def _run_with_decision_engine(
 
     confidence_delta = _calculate_confidence_delta(logician_agent, creative_agent)
 
-    # ── Claim extraction (Task 21.4 integration) ─────────────────────
-    all_claims: list[Any] = []
-    if claim_manager is not None and _is_claim_extraction_enabled():
-        from datetime import datetime as _dt
+    outputs = [
+        ("breaker", breaker_output),
+        ("logician", logician_output),
+        ("creative", creative_output),
+        ("judge", final_output),
+    ]
+    agent_outputs = dict(outputs)
+    if validation_layer is not None:
+        all_claims = validation_layer.process_claims(
+            outputs=outputs,
+            user_query=user_query,
+            history=layer_history,
+            reasoning_graph=reasoning_graph,
+            enabled=_is_claim_extraction_enabled(),
+        )
+        final_answer, unverified_dicts, firewall_result = validation_layer.apply_firewall(
+            final_text=final_output.final_answer,
+            user_query=user_query,
+            history=layer_history,
+            agent_outputs=agent_outputs,
+            reasoning_graph=reasoning_graph,
+            enabled=_is_claim_extraction_enabled(),
+        )
+    else:
+        all_claims = _process_claims_for_outputs(
+            claim_manager=claim_manager,
+            outputs=outputs,
+            user_query=user_query,
+            history=history,
+            reasoning_graph=reasoning_graph,
+        )
+        final_answer, unverified_dicts, firewall_result = _apply_output_firewall(
+            claim_manager=claim_manager,
+            final_text=final_output.final_answer,
+            user_query=user_query,
+            history=history,
+            agent_outputs=agent_outputs,
+            reasoning_graph=reasoning_graph,
+        )
+    final_output.final_answer = final_answer
 
-        for agent_name, agent_output in [
-            ("breaker", breaker_output),
-            ("logician", logician_output),
-            ("creative", creative_output),
-            ("judge", final_output),
-        ]:
-            answer_text = ""
-            if agent_output is not None:
-                if hasattr(agent_output, "answer"):
-                    answer_text = agent_output.answer
-                elif isinstance(agent_output, dict):
-                    answer_text = agent_output.get("answer", "")
-            if answer_text:
-                extracted = claim_manager.extract_claims(answer_text, agent_name)
-                for claim in extracted:
-                    claim_manager.validate_claim(claim)
-                    if reasoning_graph is not None:
-                        claim_manager.store_claim(claim, reasoning_graph)
-                    claim_manager.track_claim_provenance(
-                        claim,
-                        source=agent_name,
-                        timestamp=_dt.utcnow(),
-                        validation_method="regex_extraction",
-                    )
-                all_claims.extend(extracted)
-
-    unverified = claim_manager.get_unverified_claims(
-        claims=all_claims,
-    ) if claim_manager is not None else []
+    unverified = claim_manager.get_unverified_claims(claims=all_claims)
+    seen_claim_ids = {entry["claim_id"] for entry in unverified_dicts}
+    for claim in unverified:
+        if claim.claim_id not in seen_claim_ids:
+            unverified_dicts.append(_claim_dict(claim))
+            seen_claim_ids.add(claim.claim_id)
 
     if unverified and passport is not None:
         for c in unverified:
             passport.record_warning(
                 f"Unverified claim from {c.source_agent}: {c.content[:100]}"
             )
-
-    unverified_dicts = [
-        {
-            "claim_id": c.claim_id,
-            "content": c.content,
-            "claim_type": c.claim_type.value,
-            "confidence": c.confidence,
-            "source_agent": c.source_agent,
-        }
-        for c in unverified
-    ]
+    if firewall_result is not None and firewall_result["removed_or_qualified_count"] > 0:
+        final_output.disagreement_notes.append(
+            f"Hallucination firewall qualified {firewall_result['removed_or_qualified_count']} unsupported claim(s)."  # noqa: E501
+        )
 
     # ── Conversation completion (Task 21.5) ─────────────────────────
     conversation_metadata = complete_conversation_session(
@@ -1177,7 +1066,9 @@ async def _run_with_decision_engine(
         logician_output=logician_output,
         creative_output=creative_output,
         unverified_claims=unverified_dicts,
+        firewall_result=firewall_result,
         conversation_metadata=conversation_metadata,
+        passport=passport.to_dict() if passport is not None else None,
     )
 
 

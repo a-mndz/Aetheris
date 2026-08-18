@@ -285,11 +285,11 @@ class RuntimeEngine:
                     passport.record_validation_failure(violation.description)
                     if violation.violation_type == "prompt_injection":
                         passport.record_injection_attempt()
-                
+
                 # Emit events via StreamingManager
                 if contract.require_streaming and self.streaming_manager is not None:
                     from orchestrator.streaming import EventType, StreamEvent
-                    
+
                     if any(v.violation_type == "prompt_injection" for v in violations):
                         passport.record_injection_attempt()
                         asyncio.create_task(self.streaming_manager.emit_event(
@@ -318,7 +318,7 @@ class RuntimeEngine:
 
                 logger.warning(
                     "Security validation failed for prompt execution.",
-                    extra={"request_id": request_id, "session_id": passport.session_id, "agent_name": role, "stage": "security_validation"}
+                    extra={"request_id": request_id, "session_id": passport.session_id, "agent_name": role, "stage": "security_validation"}  # noqa: E501
                 )
                 from core.security import SecurityValidationError
 
@@ -326,38 +326,30 @@ class RuntimeEngine:
 
         # Step 2: Rate limiting
         provider_name = "default"
+        acquired = False
         if self.resource_manager is not None:
             acquired = await self.resource_manager.acquire_resources(
                 provider=provider_name, user_id=user_id
             )
             if not acquired:
-                retry_after = await self.resource_manager.queue_request(
-                    request_id=request_id,
-                    provider=provider_name,
-                    user_id=user_id,
+                if contract.require_streaming and self.streaming_manager is not None:
+                    from orchestrator.streaming import EventType, StreamEvent
+                    await self.streaming_manager.emit_event(
+                        request_id,
+                        StreamEvent(
+                            event=EventType.RATE_LIMIT_EXCEEDED,
+                            data={
+                                "request_id": request_id,
+                                "provider": provider_name,
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            },
+                        ),
+                    )
+                logger.warning(
+                    "Rate or concurrency limit exceeded.",
+                    extra={"request_id": request_id, "session_id": passport.session_id, "agent_name": role, "stage": "rate_limiting"},  # noqa: E501
                 )
-                if retry_after is not None:
-                    if contract.require_streaming and self.streaming_manager is not None:
-                        from orchestrator.streaming import EventType, StreamEvent
-                        asyncio.create_task(self.streaming_manager.emit_event(
-                            request_id,
-                            StreamEvent(
-                                event=EventType.RATE_LIMIT_EXCEEDED,
-                                data={
-                                    "request_id": request_id,
-                                    "provider": provider_name,
-                                    "retry_after": retry_after,
-                                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                                }
-                            )
-                        ))
-                    logger.warning(
-                        "Rate limit exceeded. Retry after %.1fs", retry_after,
-                        extra={"request_id": request_id, "session_id": passport.session_id, "agent_name": role, "stage": "rate_limiting"}
-                    )
-                    raise RuntimeError(
-                        f"Rate limit exceeded. Retry after {retry_after:.1f}s"
-                    )
+                raise RuntimeError("Rate or concurrency limit exceeded")
 
         # Step 3: Emit AGENT_STARTED event
         if contract.require_streaming and self.streaming_manager is not None:
@@ -424,11 +416,11 @@ class RuntimeEngine:
 
             return response
 
-        except asyncio.TimeoutError:
+        except asyncio.TimeoutError as timeout_exc:
             elapsed_ms = (time.monotonic() - start_time) * 1000
             logger.error(
                 "Agent execution timeout exceeded %ds", contract.max_timeout_sec,
-                extra={"request_id": request_id, "session_id": passport.session_id, "agent_name": role, "stage": "execution"}
+                extra={"request_id": request_id, "session_id": passport.session_id, "agent_name": role, "stage": "execution"}  # noqa: E501
             )
             passport.record_error(
                 role,
@@ -462,13 +454,13 @@ class RuntimeEngine:
 
             raise RuntimeError(
                 f"Agent '{role}' execution timed out after {contract.max_timeout_sec}s"
-            )
+            ) from timeout_exc
 
         except Exception as exc:
             elapsed_ms = (time.monotonic() - start_time) * 1000
             logger.exception(
                 "Agent execution failed: %s", exc,
-                extra={"request_id": request_id, "session_id": passport.session_id, "agent_name": role, "stage": "execution"}
+                extra={"request_id": request_id, "session_id": passport.session_id, "agent_name": role, "stage": "execution"}  # noqa: E501
             )
             passport.record_error(role, f"Agent execution failed: {exc}")
             self.track_execution_metrics(
@@ -500,7 +492,7 @@ class RuntimeEngine:
 
         finally:
             # Release rate limiting resources
-            if self.resource_manager is not None:
+            if self.resource_manager is not None and acquired:
                 self.resource_manager.release_resources(
                     provider=provider_name, user_id=user_id
                 )

@@ -1,0 +1,18 @@
+{
+  "_meta": {
+    "owner": "RFC-002",
+    "reviewers": "Infrastructure",
+    "spec": "RFC-002 §6 — provider.parallel_limit feeds the effective_parallel min(); rpm/tpm feed the rate-limit headroom check.",
+    "notes": "Providers are the first path segment of a model id (extract_provider_key in api_gateway/rate_limiter.py). SEED VALUES — reconcile with each provider's real published limits. _DEFAULT_MAX_CONCURRENCY in rate_limiter.py is 5."
+  },
+  "version": "1",
+  "providers": {
+    "google":     { "parallel_limit": 8, "requests_per_minute": 60, "tokens_per_minute": 1000000 },
+    "github":     { "parallel_limit": 4, "requests_per_minute": 30, "tokens_per_minute": 200000 },
+    "groq":       { "parallel_limit": 6, "requests_per_minute": 30, "tokens_per_minute": 300000 },
+    "unli":       { "parallel_limit": 4, "requests_per_minute": 60, "tokens_per_minute": 500000 },
+    "openai":     { "parallel_limit": 5, "requests_per_minute": 60, "tokens_per_minute": 800000 },
+    "openrouter": { "parallel_limit": 5, "requests_per_minute": 60, "tokens_per_minute": 600000 }
+  },
+  "default": { "parallel_limit": 5, "requests_per_minute": 30, "tokens_per_minute": 200000 }
+}

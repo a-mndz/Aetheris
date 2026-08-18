@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 import json
+import logging
 import re
 import threading
-from typing import Annotated, Any
 import unicodedata
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import Annotated, Any
 
 import bcrypt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from sqlalchemy import select
@@ -21,13 +22,11 @@ from core.config import get_settings
 from core.database import get_db
 from core.models import User
 
-import logging
-
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login", auto_error=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,7 +264,7 @@ class SecurityValidator:
         if scrub_count:
             with self._metrics_lock:
                 self._secrets_scrubbed += scrub_count
-            logger.info("Scrubbed %d secrets from input.", scrub_count, extra={"stage": "security_validation"})
+            logger.info("Scrubbed %d secrets from input.", scrub_count, extra={"stage": "security_validation"})  # noqa: E501
         return scrubbed
 
     @staticmethod
@@ -338,7 +337,8 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
 
 
 async def get_current_user(
-    token: Annotated[str, Depends(oauth2_scheme)],
+    request: Request,
+    bearer_token: Annotated[str | None, Depends(oauth2_scheme)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> User:
     """
@@ -349,13 +349,16 @@ async def get_current_user(
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    token = bearer_token or request.cookies.get(settings.AUTH_COOKIE_NAME)
+    if not token:
+        raise credentials_exception
     try:
         payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
         email: str | None = payload.get("sub")
         if email is None:
             raise credentials_exception
     except JWTError:
-        raise credentials_exception
+        raise credentials_exception from None
 
     # Query the user from the database
     stmt = select(User).where(User.email == email)

@@ -37,8 +37,8 @@ class ConversationState(str, Enum):
 
 # Valid state transitions for conversation sessions
 VALID_CONVERSATION_TRANSITIONS: dict[ConversationState, list[ConversationState]] = {
-    ConversationState.ACTIVE: [ConversationState.WAITING, ConversationState.COMPLETED, ConversationState.FAILED],
-    ConversationState.WAITING: [ConversationState.ACTIVE, ConversationState.COMPLETED, ConversationState.FAILED],
+    ConversationState.ACTIVE: [ConversationState.WAITING, ConversationState.COMPLETED, ConversationState.FAILED],  # noqa: E501
+    ConversationState.WAITING: [ConversationState.ACTIVE, ConversationState.COMPLETED, ConversationState.FAILED],  # noqa: E501
     ConversationState.COMPLETED: [],  # Terminal state
     ConversationState.FAILED: [],  # Terminal state
 }
@@ -437,7 +437,7 @@ class ConversationDirector:
 
         for session_id in expired_ids:
             del self._sessions[session_id]
-            logger.info("Removed expired session: %s", session_id, extra={"session_id": session_id, "stage": "conversation"})
+            logger.info("Removed expired session: %s", session_id, extra={"session_id": session_id, "stage": "conversation"})  # noqa: E501
 
         return len(expired_ids)
 
@@ -482,7 +482,7 @@ class ConversationDirector:
 
         if session_id in self._sessions:
             del self._sessions[session_id]
-            logger.info("Deleted session: %s", session_id, extra={"session_id": session_id, "stage": "conversation"})
+            logger.info("Deleted session: %s", session_id, extra={"session_id": session_id, "stage": "conversation"})  # noqa: E501
             return True
 
         return False

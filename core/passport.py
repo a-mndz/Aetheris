@@ -4,31 +4,35 @@ Thread-safe request tracking for the AETHERIS execution pipeline.
 The execution passport is intentionally implemented with dataclasses so it can
 be passed between synchronous and asynchronous components without coupling the
 runtime state to a validation framework.
+
+ponytail: Not converted to AetherisBaseModel — dataclasses + threading.Lock
+are the correct tool for mutable runtime state. Pydantic adds overhead and
+breaks the threading contract. (See ADR-001 carve-out: this is not a "schema"
+in the RFC sense.)
 """
 
 from __future__ import annotations
 
-from copy import deepcopy
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
 import json
 import logging
 import threading
 import time
-from typing import Any, Callable, ClassVar
 import uuid
+from copy import deepcopy
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any, Callable, ClassVar
 
 from core.validators import (
-    utc_now,
     as_utc,
     iso_utc,
+    utc_now,
+    validate_dict,
+    validate_list,
     validate_non_empty,
     validate_non_negative_int,
-    validate_list,
     validate_string_list,
-    validate_dict,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +113,7 @@ class ExecutionPassport:
     timestamp: datetime = field(default_factory=utc_now)
     security_metadata: SecurityMetadata = field(default_factory=SecurityMetadata)
     execution_state: ExecutionState = field(default_factory=ExecutionState)
+    execution_manifest: Any | None = None
 
     _lock: threading.Lock = field(
         default_factory=threading.Lock,
@@ -208,6 +213,12 @@ class ExecutionPassport:
         with self._lock:
             self.execution_state.checkpoints.append(checkpoint_id)
 
+    def set_execution_manifest(self, manifest: Any) -> None:
+        """Attach the request's frozen execution manifest."""
+
+        with self._lock:
+            self.execution_manifest = manifest
+
     def record_injection_attempt(self) -> None:
         """Increment the prompt-injection attempt counter."""
         with self._lock:
@@ -284,6 +295,11 @@ class ExecutionPassport:
                 "session_id": self.session_id,
                 "user_id": self.user_id,
                 "timestamp": _iso_utc(self.timestamp),
+                "execution_manifest": (
+                    self.execution_manifest.model_dump(mode="json")
+                    if hasattr(self.execution_manifest, "model_dump")
+                    else deepcopy(self.execution_manifest)
+                ),
                 "security_metadata": {
                     "injection_attempts": self.security_metadata.injection_attempts,
                     "validation_failures": list(

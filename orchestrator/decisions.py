@@ -337,7 +337,7 @@ class DecisionEngine:
             "Judge synthesis complete — validation_score=%.2f, confidence=%s",
             judge_output.validation_score,
             judge_output.overall_confidence,
-            extra={"stage": "judge", "score": judge_output.validation_score, "confidence": judge_output.overall_confidence}
+            extra={"stage": "judge", "score": judge_output.validation_score, "confidence": judge_output.overall_confidence}  # noqa: E501
         )
 
         if self.streaming_manager:
@@ -346,7 +346,7 @@ class DecisionEngine:
                     request_id=passport.request_id,
                     event=StreamEvent(
                         event=EventType.JUDGE_SYNTHESIZED,
-                        data={"score": judge_output.validation_score, "confidence": judge_output.overall_confidence}
+                        data={"score": judge_output.validation_score, "confidence": judge_output.overall_confidence}  # noqa: E501
                     )
                 ),
                 name="judge-synthesized-broadcast",

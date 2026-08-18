@@ -1,0 +1,75 @@
+{
+  "_meta": {
+    "owner": "RFC-002",
+    "reviewers": "Architecture",
+    "spec": "RFC-002 §10 (early exit), RFC-003 §4.3 (starvation), §5 (budget), §6 (meta cap), §8 (judges), §9 (repair), RFC-004 §3 (retrieval).",
+    "notes": "Central home for runtime-tunable thresholds so behavior changes without code changes. Adding a field is non-breaking; removing one requires a decision_register.md entry (RFC-008 §8)."
+  },
+  "version": "1",
+
+  "early_exit": {
+    "confidence_min": 0.95,
+    "calibration_min": 0.85,
+    "reasoning_quality_min": "strong",
+    "contradiction_score_max": 0.05,
+    "unsupported_claim_count_max": 0,
+    "route_minimums": {
+      "general":  { "evidence_strength": 0.0,  "agreement": 0.0,  "stability": 0.0,  "evidence_count": 0 },
+      "coding":   { "evidence_strength": 0.5,  "agreement": 0.6,  "stability": 0.5,  "evidence_count": 1 },
+      "research": { "evidence_strength": 0.7,  "agreement": 0.6,  "stability": 0.5,  "evidence_count": 2 },
+      "math":     { "evidence_strength": 0.6,  "agreement": 0.7,  "stability": 0.6,  "evidence_count": 1 },
+      "creative": { "evidence_strength": 0.0,  "agreement": 0.0,  "stability": 0.0,  "evidence_count": 0 }
+    }
+  },
+
+  "judge_allocation": {
+    "low":      { "judge_count": 1, "requires_consensus": false, "note": "1 judge only if early-exit fails" },
+    "medium":   { "judge_count": 2, "requires_consensus": false },
+    "high":     { "judge_count": 4, "requires_consensus": true },
+    "critical": { "judge_count": 5, "requires_consensus": true, "note": "full pipeline: independent model families + critique + consensus + firewall" }
+  },
+
+  "scheduler": {
+    "starvation_promote_after_seconds": 60,
+    "priority_bands": ["critical", "high", "normal", "background"]
+  },
+
+  "token_budget": {
+    "default_total_tokens": 15000,
+    "allocation": {
+      "planning": 0.05,
+      "generation": 0.45,
+      "critique_and_repair": 0.20,
+      "judge": 0.15,
+      "memory_context": 0.10,
+      "final_output": 0.05
+    },
+    "pressure_states": ["normal", "tight", "critical", "exhausted"]
+  },
+
+  "repair": {
+    "max_repairs": 2
+  },
+
+  "meta_reasoner": {
+    "max_mutations_per_run": 3,
+    "allowed_mutations": ["merge_nodes", "skip_stage", "downgrade_tier", "cancel_branch", "reorder"],
+    "escalation_enabled": false
+  },
+
+  "graph": {
+    "node_cap_by_complexity": { "low": 3, "medium": 6, "high": 12, "critical": 20 }
+  },
+
+  "retrieval": {
+    "route_gating": {
+      "research": "required",
+      "general": "optional",
+      "coding": "off",
+      "math": "off",
+      "creative": "off"
+    },
+    "uncertainty_can_trigger": true,
+    "source_ranking_weights": { "relevance": 0.40, "credibility": 0.25, "freshness": 0.15, "consensus": 0.20 }
+  }
+}

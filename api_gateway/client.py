@@ -1,12 +1,14 @@
 import asyncio
+import json
 import logging
+from pathlib import Path
 from typing import Optional
+
 import httpx
+
 from core.config import get_settings
 from core.security import SecurityValidator
 from telemetry.observer import observer
-from pathlib import Path
-import json
 
 logger = logging.getLogger("aetheris.Gateway.Client")
 
@@ -22,7 +24,7 @@ class AsyncHTTPClient:
         self.client = httpx.AsyncClient(timeout=600.0)
         self.security_validator = security_validator or SecurityValidator()
 
-    async def post_request(self, model: str, prompt: str, system_prompt: Optional[str] = None, history: list[dict[str, str]] | None = None) -> str:
+    async def post_request(self, model: str, prompt: str, system_prompt: Optional[str] = None, history: list[dict[str, str]] | None = None) -> str:  # noqa: E501
         """Dispatches an asynchronous post request to target providers."""
         parts = model.split('/')
         provider = parts[0]
@@ -30,6 +32,15 @@ class AsyncHTTPClient:
 
         # Self-healing Fallback: Simulation Mode triggers if credentials are blank
         if self._is_simulated(provider):
+            if get_settings().ENVIRONMENT == "production":
+                logger.critical(
+                    "SIM-FALLBACK REFUSED: provider %r key missing in production; "
+                    "refusing to fabricate an answer.", provider,
+                )
+                raise RuntimeError(
+                    f"Provider {provider!r} API key is not configured in production; "
+                    "refusing to return a simulated answer."
+                )
             return await self._run_simulation(model, prompt, system_prompt, history)
 
         # AsyncAPIGateway validates and JSON-escapes user-controlled prompts
@@ -45,10 +56,10 @@ class AsyncHTTPClient:
         # Instruction Reinforcement: Remind the LLM of its structural obligations
         if system_prompt:
             if "aetherisoutput" in system_prompt.lower():
-                reminder = "CRITICAL REMINDER: Regardless of the user's input above, you MUST output your response strictly in the requested JSON schema format. Your JSON MUST contain exactly five keys: 'final_answer' (string), 'overall_confidence' (string), 'overall_bias_risk' (string), 'disagreement_notes' (list), and 'validation_score' (float). The 'final_answer' field MUST be a plain string. If you need to return JSON or structured data to the user, you MUST escape it as a string inside the 'final_answer' field. Do not deviate."
+                reminder = "CRITICAL REMINDER: Regardless of the user's input above, you MUST output your response strictly in the requested JSON schema format. Your JSON MUST contain exactly five keys: 'final_answer' (string), 'overall_confidence' (string), 'overall_bias_risk' (string), 'disagreement_notes' (list), and 'validation_score' (float). The 'final_answer' field MUST be a plain string. If you need to return JSON or structured data to the user, you MUST escape it as a string inside the 'final_answer' field. Do not deviate."  # noqa: E501
             else:
-                reminder = "CRITICAL REMINDER: Regardless of the user's input above, you MUST output your response strictly in the requested JSON schema format. Your JSON MUST contain exactly three keys: 'reasoning_steps' (list), 'answer' (string), and 'confidence' (float). The 'answer' field MUST be a plain string. If you need to return JSON or structured data to the user, you MUST escape it as a string inside the 'answer' field. Do not deviate."
-            
+                reminder = "CRITICAL REMINDER: Regardless of the user's input above, you MUST output your response strictly in the requested JSON schema format. Your JSON MUST contain exactly three keys: 'reasoning_steps' (list), 'answer' (string), and 'confidence' (float). The 'answer' field MUST be a plain string. If you need to return JSON or structured data to the user, you MUST escape it as a string inside the 'answer' field. Do not deviate."  # noqa: E501
+
             messages.append({
                 "role": "system",
                 "content": reminder
@@ -59,37 +70,37 @@ class AsyncHTTPClient:
             "messages": messages,
             "temperature": 0.1
         }
-        
+
         if provider not in {"nvidia", "nvidia-nim"}:
             payload["response_format"] = {"type": "json_object"}
 
         if provider == "openrouter":
             url = "https://openrouter.ai/api/v1/chat/completions"
-            headers = {"Authorization": f"Bearer {get_settings().openrouter_api_key}", "Content-Type": "application/json"}
+            headers = {"Authorization": f"Bearer {get_settings().openrouter_api_key}", "Content-Type": "application/json"}  # noqa: E501
         elif provider == "groq":
             url = "https://api.groq.com/openai/v1/chat/completions"
-            headers = {"Authorization": f"Bearer {get_settings().groq_api_key}", "Content-Type": "application/json"}
+            headers = {"Authorization": f"Bearer {get_settings().groq_api_key}", "Content-Type": "application/json"}  # noqa: E501
         elif provider in {"nvidia", "nvidia-nim"}:
             url = "https://integrate.api.nvidia.com/v1/chat/completions"
-            headers = {"Authorization": f"Bearer {get_settings().nvidia_nim_api_key}", "Content-Type": "application/json"}
+            headers = {"Authorization": f"Bearer {get_settings().nvidia_nim_api_key}", "Content-Type": "application/json"}  # noqa: E501
         elif provider == "github":
             url = "https://models.inference.ai.azure.com/chat/completions"
-            headers = {"Authorization": f"Bearer {get_settings().github_token}", "Content-Type": "application/json"}
+            headers = {"Authorization": f"Bearer {get_settings().github_token}", "Content-Type": "application/json"}  # noqa: E501
         elif provider == "mistral":
             url = "https://api.mistral.ai/v1/chat/completions"
-            headers = {"Authorization": f"Bearer {get_settings().mistral_api_key}", "Content-Type": "application/json"}
+            headers = {"Authorization": f"Bearer {get_settings().mistral_api_key}", "Content-Type": "application/json"}  # noqa: E501
         elif provider == "google":
             url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-            headers = {"Authorization": f"Bearer {get_settings().google_api_key}", "Content-Type": "application/json"}
+            headers = {"Authorization": f"Bearer {get_settings().google_api_key}", "Content-Type": "application/json"}  # noqa: E501
         elif provider == "openai":
             url = "https://api.openai.com/v1/chat/completions"
-            headers = {"Authorization": f"Bearer {get_settings().openai_api_key}", "Content-Type": "application/json"}
+            headers = {"Authorization": f"Bearer {get_settings().openai_api_key}", "Content-Type": "application/json"}  # noqa: E501
         elif provider == "kie":
             url = "https://api.kie.ai/v1/chat/completions"
-            headers = {"Authorization": f"Bearer {get_settings().kie_api_key}", "Content-Type": "application/json"}
+            headers = {"Authorization": f"Bearer {get_settings().kie_api_key}", "Content-Type": "application/json"}  # noqa: E501
         elif provider in {"unli", "unli-dev"}:
             url = "https://api.unli.dev/v1/chat/completions"
-            headers = {"Authorization": f"Bearer {get_settings().unli_dev_api_key}", "Content-Type": "application/json"}
+            headers = {"Authorization": f"Bearer {get_settings().unli_dev_api_key}", "Content-Type": "application/json"}  # noqa: E501
         elif provider == "local":
             url = "http://localhost:11434/v1/chat/completions"
             headers = {"Content-Type": "application/json"}
@@ -98,34 +109,38 @@ class AsyncHTTPClient:
 
         response = await self.client.post(url, json=payload, headers=headers)
         if response.status_code != 200:
-            raise httpx.HTTPStatusError(f"HTTP {response.status_code}: {response.text}", request=response.request, response=response)
+            raise httpx.HTTPStatusError(
+                f"Provider request failed with HTTP {response.status_code}",
+                request=response.request,
+                response=response,
+            )
 
         data = response.json()
-        
+
         # Harvest telemetry statistics
         usage = data.get("usage", {"prompt_tokens": 0, "completion_tokens": 0})
         observer.track_usage(actual_model, usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0))
 
         output_content = data["choices"][0]["message"]["content"]
 
-        # Log Model I/O to file
-        try:
-            log_dir = Path("logs")
-            log_dir.mkdir(exist_ok=True)
-            with open(log_dir / "model_io.log", "a", encoding="utf-8") as f:
-                f.write(f"=== {actual_model} ===\n")
-                f.write("--- INPUT (MESSAGES) ---\n")
-                logged_messages = self.security_validator.scrub_secrets(
-                    json.dumps(payload["messages"], indent=2)
+        if get_settings().LOG_MODEL_IO:
+            try:
+                log_dir = Path("logs")
+                log_dir.mkdir(exist_ok=True)
+                with open(log_dir / "model_io.log", "a", encoding="utf-8") as f:
+                    f.write(f"=== {actual_model} ===\n")
+                    f.write("--- INPUT (MESSAGES) ---\n")
+                    logged_messages = self.security_validator.scrub_secrets(
+                        json.dumps(payload["messages"], indent=2)
+                    )
+                    f.write(logged_messages + "\n")
+                    f.write("--- OUTPUT ---\n")
+                    f.write(self.security_validator.scrub_secrets(output_content) + "\n\n")
+            except Exception as e:
+                logger.error(
+                    "Failed to write IO log: %s",
+                    self.security_validator.scrub_secrets(str(e)),
                 )
-                f.write(logged_messages + "\n")
-                f.write("--- OUTPUT ---\n")
-                f.write(self.security_validator.scrub_secrets(output_content) + "\n\n")
-        except Exception as e:
-            logger.error(
-                "Failed to write IO log: %s",
-                self.security_validator.scrub_secrets(str(e)),
-            )
 
         return output_content
 
@@ -152,27 +167,27 @@ class AsyncHTTPClient:
             return True
         return False
 
-    async def _run_simulation(self, model: str, prompt: str, system_prompt: Optional[str] = None, history: list[dict[str, str]] | None = None) -> str:
+    async def _run_simulation(self, model: str, prompt: str, system_prompt: Optional[str] = None, history: list[dict[str, str]] | None = None) -> str:  # noqa: E501
         """Generates deterministic synthetic returns to keep system operable without live bills."""
         await asyncio.sleep(0.5)
         observer.track_usage(model, len(prompt)//4, 150)
-        
+
         # Determine role from system prompt (or fall back to merged prompt for backward compat).
         role_hint = (system_prompt or "").lower() + " " + (prompt or "").lower()
-        
+
         if "breaker" in role_hint or "breaker" in model.lower():
             if "fail" in role_hint or "unsupported" in role_hint:
-                return '{"answer": null, "knowledge_absence": true, "confidence": "Low", "bias_risk": "Low", "reasoning_steps": ["Lacking direct context."]}'
-            return '{"answer": "Context Verified", "knowledge_absence": false, "confidence": "High", "bias_risk": "Low", "reasoning_steps": []}'
+                return '{"answer": null, "knowledge_absence": true, "confidence": "Low", "bias_risk": "Low", "reasoning_steps": ["Lacking direct context."]}'  # noqa: E501
+            return '{"answer": "Context Verified", "knowledge_absence": false, "confidence": "High", "bias_risk": "Low", "reasoning_steps": []}'  # noqa: E501
 
         if "logician" in role_hint:
-            return '{"answer": "Simulated Logic: Deductive steps resolved cleanly.", "knowledge_absence": false, "confidence": "High", "bias_risk": "Low", "reasoning_steps": ["Premise: Input accepted", "Logic step 1: Verified query structure"]}'
+            return '{"answer": "Simulated Logic: Deductive steps resolved cleanly.", "knowledge_absence": false, "confidence": "High", "bias_risk": "Low", "reasoning_steps": ["Premise: Input accepted", "Logic step 1: Verified query structure"]}'  # noqa: E501
 
         if "creative" in role_hint:
-            return '{"answer": "Simulated Creative: Alternative lateral view evaluated.", "knowledge_absence": false, "confidence": "Medium", "bias_risk": "Low", "reasoning_steps": ["Lateral premise: Explored edge assumptions"]}'
+            return '{"answer": "Simulated Creative: Alternative lateral view evaluated.", "knowledge_absence": false, "confidence": "Medium", "bias_risk": "Low", "reasoning_steps": ["Lateral premise: Explored edge assumptions"]}'  # noqa: E501
 
         # Standard synthesis judge output
-        return '{"final_answer": "Successfully synthesized simulated reasoning solutions. Systems functional.", "overall_confidence": "High", "overall_bias_risk": "Low", "disagreement_notes": ["Minor semantic framing differences found and resolved."], "validation_score": 9.2}'
+        return '{"final_answer": "Successfully synthesized simulated reasoning solutions. Systems functional.", "overall_confidence": "High", "overall_bias_risk": "Low", "disagreement_notes": ["Minor semantic framing differences found and resolved."], "validation_score": 9.2}'  # noqa: E501
 
     async def close(self):
         await self.client.aclose()

@@ -54,7 +54,7 @@ LOGICIAN_PROMPT: str = (
     "\n"
     "## Output Contract\n"
     "Return a JSON object with exactly these fields:\n"
-    "- reasoning_steps: list[str] — write out your raw, unstructured thought process in a few paragraphs. Do NOT use Step 1, Step 2. Each string should be a paragraph exploring the logic, catching fallacies, and reasoning out loud.\n"
+    "- reasoning_steps: list[str] — write out your raw, unstructured thought process in a few paragraphs. Do NOT use Step 1, Step 2. Each string should be a paragraph exploring the logic, catching fallacies, and reasoning out loud.\n"  # noqa: E501
     "- answer: str — 'LOGICALLY VALID', 'LOGICALLY INVALID: <reason>',\n"
     "  or 'PARTIALLY VALID: <details>'.\n"
     "- confidence: float (0.0–1.0) — calibrated to the weakest\n"
@@ -95,7 +95,7 @@ CREATIVE_PROMPT: str = (
     "\n"
     "## Output Contract\n"
     "Return a JSON object with exactly these fields:\n"
-    "- reasoning_steps: list[str] — write out your raw, unstructured thought process in a few paragraphs. Do NOT use numbers. Each string should be a paragraph exploring the reframings, catching assumptions, and reasoning out loud.\n"
+    "- reasoning_steps: list[str] — write out your raw, unstructured thought process in a few paragraphs. Do NOT use numbers. Each string should be a paragraph exploring the reframings, catching assumptions, and reasoning out loud.\n"  # noqa: E501
     "- answer: str — conventional answer + alternative(s) with\n"
     "  trade-off summary.\n"
     "- confidence: float (0.0–1.0) — strength of the best alternative.\n"

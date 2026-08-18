@@ -8,17 +8,18 @@ the signal-evaluation layer, and the final synthesis output.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any, Literal
-import json
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
+from core.base import AetherisBaseModel
 
 # ── Agent Output ─────────────────────────────────────────────────────────
 
 
-class AgentOutput(BaseModel):
+class AgentOutput(AetherisBaseModel):
     """
     Structured output contract that every generation agent must conform to.
 
@@ -34,7 +35,7 @@ class AgentOutput(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def map_contract_fields(cls, data: Any) -> Any:
-        """Map alternative XML response contract fields and dynamic role XML schemas to standard schema fields."""
+        """Map alternative XML response contract fields and dynamic role XML schemas to standard schema fields."""  # noqa: E501
         if isinstance(data, dict):
             # 1. Resolve 'confidence'
             if "confidence" in data:
@@ -50,11 +51,11 @@ class AgentOutput(BaseModel):
             # 2. Resolve 'answer'
             if "answer" not in data:
                 potential_answers = [
-                    "summary", 
-                    "draft_answer", 
-                    "primary_solution", 
-                    "recommendation", 
-                    "problem", 
+                    "summary",
+                    "draft_answer",
+                    "primary_solution",
+                    "recommendation",
+                    "problem",
                     "status"
                 ]
                 for field in potential_answers:
@@ -126,7 +127,7 @@ class AgentOutput(BaseModel):
 # ── aetheris Final Output ──────────────────────────────────────────────────
 
 
-class aetherisOutput(BaseModel):
+class aetherisOutput(AetherisBaseModel):
     """
     The final synthesized validation output returned by validation arbitrage.
     """
@@ -197,7 +198,7 @@ class aetherisOutput(BaseModel):
 # ── AETHERIS Shared Schemas ─────────────────────────────────────────────────────
 
 
-class SessionMetadata(BaseModel):
+class SessionMetadata(AetherisBaseModel):
     """Conversation session metadata shared with API and telemetry layers."""
 
     model_config = ConfigDict(strict=True)
@@ -211,7 +212,7 @@ class SessionMetadata(BaseModel):
     state: Literal["active", "waiting", "completed", "failed"]
 
 
-class PipelineResult(BaseModel):
+class PipelineResult(AetherisBaseModel):
     """Structured result produced by a complete AETHERIS pipeline execution."""
 
     model_config = ConfigDict(strict=True)
@@ -227,7 +228,7 @@ class PipelineResult(BaseModel):
     security_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class ProviderHealthStatus(BaseModel):
+class ProviderHealthStatus(AetherisBaseModel):
     """Current provider health snapshot used for routing and monitoring."""
 
     model_config = ConfigDict(strict=True)
@@ -240,7 +241,7 @@ class ProviderHealthStatus(BaseModel):
     last_check: datetime
 
 
-class CheckpointData(BaseModel):
+class CheckpointData(AetherisBaseModel):
     """Minimal state required to resume a pipeline from a checkpoint."""
 
     model_config = ConfigDict(strict=True)
@@ -251,3 +252,183 @@ class CheckpointData(BaseModel):
     timestamp: datetime
     agent_outputs: dict[str, Any] = Field(default_factory=dict)
     partial_results: dict[str, Any] = Field(default_factory=dict)
+
+
+# ── Stage Assessment (RFC-001 §5.1) ─────────────────────────────────────
+
+
+class StageAssessment(AetherisBaseModel):
+    """Assessment of a single pipeline stage — extended fields default to None."""
+
+    confidence: float
+    calibration: float | None = None
+    evidence_strength: float | None = None
+    novelty: float | None = None
+    agreement: float | None = None
+    stability: float | None = None
+    reasoning_quality: str | None = None
+    evidence_count: int = 0
+    contradiction_score: float = 0.0
+    unsupported_claim_count: int = 0
+
+    @classmethod
+    def from_minimal(cls, confidence: float) -> "StageAssessment":
+        """Accept the legacy 3-field shape — fully-defaulted assessment for regression tests."""
+        return cls(confidence=confidence)
+
+
+# ── Planner Schemas (RFC-003 §3) ─────────────────────────────────────────
+
+
+class TaskProfile(AetherisBaseModel):
+    """Classification result from IntentAnalyzer — deterministic, token-free."""
+
+    task_type: str = "general"
+    complexity: str = "medium"
+    criticality: str = "low"
+    needs_decomposition: bool = False
+    requires_rag: bool = False
+    requires_code_context: bool = False
+    requires_math_check: bool = False
+    requires_creativity: bool = False
+
+
+class StrategicPlan(AetherisBaseModel):
+    """LLM-assisted decomposition of a complex task into sub-problems."""
+
+    goal: str = ""
+    sub_problems: list[str] = Field(default_factory=list)
+    constraints: list[str] = Field(default_factory=list)
+    success_criteria: list[str] = Field(default_factory=list)
+    required_skills: list[str] = Field(default_factory=list)
+    risk_notes: list[str] = Field(default_factory=list)
+
+
+class PipelineBudget(AetherisBaseModel):
+    """Token budget with pressure states — acts as the repair circuit breaker."""
+
+    total_tokens: int = 15000
+    planning_pct: float = 5.0
+    generation_pct: float = 45.0
+    critique_repair_pct: float = 20.0
+    judge_pct: float = 15.0
+    memory_pct: float = 10.0
+    final_pct: float = 5.0
+    pressure: str = "normal"  # normal | tight | critical | exhausted
+
+
+class PipelinePlan(AetherisBaseModel):
+    """Complete plan produced by ExecutionPlanner — graph + budget + predictions."""
+
+    graph: "TaskGraph | None" = None
+    budget: PipelineBudget = Field(default_factory=PipelineBudget)
+    strategy: str = "deterministic"
+
+
+class TaskNode(AetherisBaseModel):
+    """A single node in a TaskGraph — maps to one unit of work."""
+
+    task_id: str = ""
+    objective: str = ""
+    skills_required: list[str] = Field(default_factory=list)
+    model_tier: str = "default"
+    depends_on: list[str] = Field(default_factory=list)
+    can_run_parallel: bool = True
+    expected_tokens: int | None = None
+    expected_latency_ms: int | None = None
+    priority: str = "normal"  # critical | high | normal | background
+    input_contract: "InputContract | None" = None
+    output_contract: "OutputContract | None" = None
+    failure_contract: "FailureContract | None" = None
+
+
+class TaskGraph(AetherisBaseModel):
+    """Validated DAG of TaskNodes — the executable plan shape."""
+
+    nodes: list[TaskNode] = Field(default_factory=list)
+    root_task_id: str = ""
+    final_task_id: str = ""
+    graph_version: str | None = None
+    graph_fingerprint: str | None = None
+    planner_version: str | None = None
+    version_stamp: "VersionStamp | None" = None
+    execution_manifest: "ExecutionManifest | None" = None
+
+
+# ── Prediction (RFC-003 §3.6) ────────────────────────────────────────────
+
+
+class PredictionInterval(AetherisBaseModel):
+    """A predicted value with variance bounds."""
+
+    value: float = 0.0
+    variance: float = 0.0
+    std_dev: float = 0.0
+    sample_size: int = 0
+
+    @property
+    def upper_bound(self) -> float:
+        return self.value + self.std_dev
+
+    @property
+    def lower_bound(self) -> float:
+        return self.value - self.std_dev
+
+
+class Prediction(AetherisBaseModel):
+    """Execution cost / latency / confidence estimates with probability fields."""
+
+    expected_cost: PredictionInterval = Field(default_factory=PredictionInterval)
+    expected_latency_ms: PredictionInterval = Field(default_factory=PredictionInterval)
+    expected_tokens: PredictionInterval = Field(default_factory=PredictionInterval)
+    expected_confidence: PredictionInterval = Field(default_factory=PredictionInterval)
+    probability_of_failure: float = 0.0
+    probability_of_repair: float = 0.0
+    probability_of_retrieval_needed: float = 0.0
+    probability_of_clarification_needed: float = 0.0
+    probability_of_consensus_disagreement: float = 0.0
+    expected_repair_count: int = 0
+    calibration_confidence: float = 0.0
+
+
+# ── Clarification (RFC-003 §3.7) ─────────────────────────────────────────
+
+
+class ClarificationRequest(AetherisBaseModel):
+    """Structured request for user input when the system is uncertain."""
+
+    status: Literal["needs_clarification"] = "needs_clarification"
+    question: str = ""
+    reason: str = ""
+    missing_context: list[str] = Field(default_factory=list)
+    options: list[str] = Field(default_factory=list)
+
+
+# ── Version Stamp (RFC-005 §2) ───────────────────────────────────────────
+
+
+class VersionStamp(AetherisBaseModel):
+    """Immutable version snapshot — set by producer, consumed everywhere."""
+
+    architecture_version: str = "0.1.0"
+    planner_version: str | None = None
+    scheduler_version: str | None = None
+    budget_version: str | None = None
+    routing_version: str | None = None
+    capabilities_version: str | None = None
+    prompt_versions: dict[str, str] = Field(default_factory=dict)
+    consensus_version: str | None = None
+    contracts_version: str | None = None
+    resource_policy_version: str | None = None
+    prediction_model_version: str | None = None
+    graph_version: str | None = None
+    graph_fingerprint: str | None = None
+
+
+# Resolve forward references introduced by Step 2 contracts.
+from orchestrator.contracts import FailureContract, InputContract, OutputContract
+from orchestrator.execution_manifest import ExecutionManifest
+
+PipelinePlan.model_rebuild()
+TaskNode.model_rebuild()
+TaskGraph.model_rebuild()

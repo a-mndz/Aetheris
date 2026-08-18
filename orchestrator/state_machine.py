@@ -154,7 +154,7 @@ class StateMachine:
             from_state.value,
             to_state.value,
             self.request_id,
-            extra={"request_id": self.request_id, "stage": "state_machine", "from_state": from_state.value, "to_state": to_state.value}
+            extra={"request_id": self.request_id, "stage": "state_machine", "from_state": from_state.value, "to_state": to_state.value}  # noqa: E501
         )
 
         return transition
@@ -187,7 +187,7 @@ class StateMachine:
             state: Specific state for on_enter/on_exit hooks (None for on_transition).
         """
         if hook_type not in self.hooks:
-            raise ValueError(f"Invalid hook type: {hook_type}. Must be one of: on_enter, on_exit, on_transition")
+            raise ValueError(f"Invalid hook type: {hook_type}. Must be one of: on_enter, on_exit, on_transition")  # noqa: E501
 
         self.hooks[hook_type].append((state, callback))
         logger.debug(
@@ -227,7 +227,7 @@ class StateMachine:
                         hook_type,
                         state.value if state else "transition",
                         str(e),
-                        extra={"request_id": self.request_id, "stage": "state_machine", "hook_type": hook_type, "error": str(e)}
+                        extra={"request_id": self.request_id, "stage": "state_machine", "hook_type": hook_type, "error": str(e)}  # noqa: E501
                     )
                     raise
 
@@ -254,6 +254,6 @@ class StateMachine:
             transition.from_state.value,
             transition.to_state.value,
             self.request_id,
-            extra={"request_id": self.request_id, "stage": "state_machine", "from_state": transition.from_state.value, "to_state": transition.to_state.value}
+            extra={"request_id": self.request_id, "stage": "state_machine", "from_state": transition.from_state.value, "to_state": transition.to_state.value}  # noqa: E501
         )
         return event_data

@@ -41,6 +41,7 @@ skills/
 skills-lock.json
 session-*.md
 .impeccable/
+.ua/
 
 # Python Coverage
 .coverage
@@ -69,10 +70,6 @@ pnpm-debug.log*
 
 # Recovered files
 recovered_*.txt
-
-# Tests
-test/
-tests/
 
 # Local reports & UI build
 PROJECT_ANALYSIS_2026-07-11.md

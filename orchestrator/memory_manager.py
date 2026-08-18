@@ -79,9 +79,10 @@ class MemoryManager:
                 import tiktoken
 
                 self._token_encoder = tiktoken.get_encoding("cl100k_base")
-            except ImportError:
+            except Exception as exc:
                 logger.warning(
-                    "tiktoken not installed; using word-count fallback for token estimation",
+                    "tiktoken unavailable; using word-count fallback for token estimation: %s",
+                    exc,
                     extra={"stage": "memory_manager"}
                 )
                 self._token_encoder = None
@@ -150,7 +151,7 @@ class MemoryManager:
         metrics = self.get_context_metrics(original_count, compressed_count, limit)
 
         if metrics.get("compression_failed", False):
-            logger.warning("Compression failed for strategy %s", effective_strategy.value, extra={"stage": "memory_manager", "strategy": effective_strategy.value})
+            logger.warning("Compression failed for strategy %s", effective_strategy.value, extra={"stage": "memory_manager", "strategy": effective_strategy.value})  # noqa: E501
 
         return compressed, summary
 

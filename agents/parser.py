@@ -21,8 +21,8 @@ import json
 import logging
 from typing import Any, TypeVar
 
-from pydantic import BaseModel, ValidationError
 from json_repair import repair_json
+from pydantic import BaseModel, ValidationError
 
 logger = logging.getLogger(__name__)
 

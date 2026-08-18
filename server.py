@@ -15,23 +15,22 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
-
-# CRIT-007: load provider API keys from the OS secret store BEFORE
-# anything that transitively imports ``core.config``.  Idempotent —
-# safe to call even when ``main.py`` has already done so.
-import secrets_bootstrap  # noqa: F401  (side-effecting import)
+from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, field_validator, model_validator
 from pydantic import Field as PField
-from sqlalchemy import select, delete
-from sqlalchemy.orm import selectinload
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
+# CRIT-007: load provider API keys from the OS secret store BEFORE
+# anything that transitively imports ``core.config``.  Idempotent —
+# safe to call even when ``main.py`` has already done so.
+import secrets_bootstrap  # noqa: F401  (side-effecting import)
 from api_gateway import AsyncAPIGateway, ProviderPool, ProviderStrategy
 from api_gateway.rate_limiter import (
     HealthMetrics,
@@ -39,8 +38,8 @@ from api_gateway.rate_limiter import (
     extract_provider_key,
 )
 from core.config import get_settings
-from core.database import engine, get_db
-from core.models import Base, User, ConversationSessionRecord, ConversationMessageRecord
+from core.database import get_db, verify_schema_current
+from core.models import ConversationMessageRecord, ConversationSessionRecord, User
 from core.security import (
     SecurityValidationError,
     create_access_token,
@@ -49,17 +48,17 @@ from core.security import (
     require_role,
     verify_password,
 )
-from orchestrator import run_micro_mode, stream_micro_mode
 from orchestrator.aetheris_orchestrator import create_request_passport, initialize_aetheris_components
 from orchestrator.background_tasks import cancel_background_tasks, create_background_tasks
 from orchestrator.conversation import ConversationState
 from orchestrator.pipelines import _build_frontend_payload
-from orchestrator.streaming import EventType, StreamEvent, StreamingManager
+from orchestrator.streaming import EventType, StreamingManager
 from telemetry.observer import observer
 
 logger = logging.getLogger("aetheris.web")
 
 _PIPELINE_TIMEOUT_SEC = 900
+_MAX_REQUEST_BODY_BYTES = 100_000
 
 # ── Global infrastructure (initialised in lifespan) ─────────────────────
 _gateway: AsyncAPIGateway | None = None
@@ -127,15 +126,14 @@ async def lifespan(app: FastAPI):
         format=settings.LOG_FORMAT,
     )
 
-    # Auto-create tables on startup in PostgreSQL
-    logger.info("Initializing PostgreSQL database tables on startup...")
+    logger.info("Verifying PostgreSQL schema revision...")
     try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+        await verify_schema_current()
     except Exception as exc:
-        logger.error("PostgreSQL database connection failed at startup: %s", exc)
+        logger.error("PostgreSQL schema verification failed at startup: %s", exc)
         raise RuntimeError(
-            "PostgreSQL database is unreachable. Verify DATABASE_URL and ensure the PostgreSQL service is running."
+            "PostgreSQL is unreachable or not at the required Alembic revision. "
+            "Verify DATABASE_URL and run 'alembic upgrade head'."
         ) from exc
 
     global _background_tasks
@@ -176,6 +174,26 @@ app = FastAPI(title="aetheris", version="1.0.0", lifespan=lifespan)
 
 
 @app.middleware("http")
+async def request_body_size_limit(request: Request, call_next):
+    """Reject oversized request bodies before validation or provider work."""
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > _MAX_REQUEST_BODY_BYTES:
+                return JSONResponse({"detail": "Request body too large"}, status_code=413)
+        except ValueError:
+            return JSONResponse({"detail": "Invalid Content-Length"}, status_code=400)
+
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > _MAX_REQUEST_BODY_BYTES:
+            return JSONResponse({"detail": "Request body too large"}, status_code=413)
+    request._body = bytes(body)
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def csrf_origin_check(request: Request, call_next):
     """MED-019 lightweight CSRF origin check for state-changing requests.
 
@@ -186,13 +204,28 @@ async def csrf_origin_check(request: Request, call_next):
     if request.method.upper() not in {"POST", "PUT", "DELETE", "PATCH"}:
         return await call_next(request)
 
+    settings = get_settings()
+    cookie_authenticated = (
+        settings.AUTH_COOKIE_NAME in request.cookies
+        and "authorization" not in request.headers
+    )
     try:
         allowlist = _resolve_cors_origins()
     except RuntimeError:
+        if cookie_authenticated:
+            return JSONResponse(
+                {"status": "error", "error": "CSRF origin policy unavailable"},
+                status_code=503,
+            )
         return await call_next(request)
 
     origin = request.headers.get("origin") or request.headers.get("referer") or ""
     if not origin:
+        if cookie_authenticated:
+            return JSONResponse(
+                {"status": "error", "error": "CSRF origin required"},
+                status_code=403,
+            )
         return await call_next(request)
 
     from urllib.parse import urlparse
@@ -215,24 +248,43 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-WEB_DIR = Path(__file__).parent / "new ui" / "frontend" / "dist"
+WEB_DIR = Path(__file__).parent / "frontend" / "dist"
 
 
 # ── Request / Response Models ───────────────────────────────────────────
 
-class Message(BaseModel):
-    role: str
-    content: str
+class _StrictRequestModel(BaseModel):
+    """Base for public API ingress payloads (RFC-001 §4 critical contract).
+
+    Unknown fields are rejected rather than silently ignored, so malformed
+    or unexpected client payloads fail fast instead of masking bugs. Response
+    models stay on plain ``BaseModel`` — only inbound request bodies are
+    critical contracts. Superseded by ``AetherisBaseModel`` once RFC-007
+    Step 2 lands ``core/base.py``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
 
-class QueryRequest(BaseModel):
-    query: str
-    history: list[Message] | None = None
+class Message(_StrictRequestModel):
+    role: Literal["user", "assistant"]
+    content: str = PField(min_length=1, max_length=10_000)
+
+
+class QueryRequest(_StrictRequestModel):
+    query: str = PField(min_length=1, max_length=10_000)
+    history: list[Message] | None = PField(default=None, max_length=50)
+
+    @model_validator(mode="after")
+    def _bound_history(self) -> "QueryRequest":
+        if self.history and sum(len(message.content) for message in self.history) > 50_000:
+            raise ValueError("history content must not exceed 50000 characters")
+        return self
 
 
 # ── Auth Request Schemas ──────────────────────────────────────────────────
 
-class AuthLoginRequest(BaseModel):
+class AuthLoginRequest(_StrictRequestModel):
     email: str
     password: str
 
@@ -259,9 +311,8 @@ class AuthRegisterRequest(AuthLoginRequest):
 
 # ── Session Management Schemas ────────────────────────────────────────────
 
-class SessionCreateRequest(BaseModel):
+class SessionCreateRequest(_StrictRequestModel):
     session_id: str | None = None
-    user_id: str | None = None
 
 
 class SessionCreateResponse(BaseModel):
@@ -294,7 +345,7 @@ class CheckpointListResponse(BaseModel):
     checkpoints: list[dict[str, str]]
 
 
-class CheckpointRestoreRequest(BaseModel):
+class CheckpointRestoreRequest(_StrictRequestModel):
     pass
 
 
@@ -322,7 +373,7 @@ class ProviderHealthResponse(BaseModel):
     last_failure_timestamp: float | None = None
 
 
-class ProviderRecoveryRequest(BaseModel):
+class ProviderRecoveryRequest(_StrictRequestModel):
     pass
 
 
@@ -386,7 +437,7 @@ def _set_auth_cookie(response: JSONResponse, token: str) -> None:
         key=settings.AUTH_COOKIE_NAME,
         value=token,
         httponly=True,
-        secure=False,  # Flip to ``True`` once HTTPS (MED-022) is configured per environment.
+        secure=settings.ENVIRONMENT != "development",
         samesite="strict",
         max_age=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         path="/",
@@ -395,12 +446,7 @@ def _set_auth_cookie(response: JSONResponse, token: str) -> None:
 
 @app.post("/auth/login")
 async def login_user(req: AuthLoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
-    """Authenticate credentials and emit JWT cookie (HIGH-013 httpOnly).
-
-    The response body still contains ``access_token`` so the frontend can
-    detect the legacy localStorage path during the phased migration; new
-    clients should rely on the cookie via ``credentials: 'include'``.
-    """
+    """Authenticate credentials and emit an httpOnly JWT cookie."""
     client_ip = request.client.host if request.client else "unknown"
     if not _enforce_auth_rate_limit(client_ip):
         raise HTTPException(
@@ -420,7 +466,7 @@ async def login_user(req: AuthLoginRequest, request: Request, db: AsyncSession =
         )
 
     token = create_access_token(data={"sub": user.email})
-    response = JSONResponse({"access_token": token, "token_type": "bearer"})
+    response = JSONResponse({"status": "ok"})
     _set_auth_cookie(response, token)
     return response
 
@@ -439,15 +485,9 @@ async def refresh_token(
     request: Request,
     current_user: User = Depends(get_current_user),
 ) -> JSONResponse:
-    """Issue a fresh access token (MED-020).
-
-    Accepts the existing JWT via either the httpOnly auth cookie or the
-    legacy ``Authorization`` header (HIGH-013 phased rollout).  Returns a
-    new token and refreshes the cookie so the front-end interceptor can
-    transparently rehydrate expired sessions.
-    """
+    """Refresh the authenticated user's httpOnly JWT cookie."""
     token = create_access_token(data={"sub": current_user.email})
-    response = JSONResponse({"access_token": token, "token_type": "bearer"})
+    response = JSONResponse({"status": "ok"})
     _set_auth_cookie(response, token)
     return response
 
@@ -468,12 +508,13 @@ async def handle_query(
         session_id = str(uuid.uuid4())
         passport = create_request_passport()
         result = await asyncio.wait_for(
-            run_micro_mode(
+            _aetheris["execution_manager"].execute(
                 user_query=req.query.strip(),
                 gateway=_gateway,
                 strategy=_strategy,
                 pool=_pool,
                 history=history_list,
+                passport=passport,
                 decision_engine=_aetheris.get("decision_engine"),
                 reasoning_graph=_aetheris.get("reasoning_graph"),
                 claim_manager=_aetheris.get("claim_manager"),
@@ -484,7 +525,6 @@ async def handle_query(
             timeout=_PIPELINE_TIMEOUT_SEC,
         )
 
-        result["_passport"] = passport.to_dict()
         return JSONResponse(_build_frontend_payload(result))
 
     except SecurityValidationError as exc:
@@ -509,7 +549,7 @@ async def handle_query(
         return JSONResponse(
             {
                 "status": "error",
-                "answer": f"{type(exc).__name__}: {exc}",
+                "answer": "Pipeline execution failed.",
                 "confidence_score": 0.0,
                 "bias_risk": "Unknown",
                 "decision": None,
@@ -536,43 +576,68 @@ async def handle_query_stream(
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
 
-    request_id = str(uuid.uuid4())
+    session_id = str(uuid.uuid4())
+    passport = create_request_passport(session_id=session_id)
+    request_id = passport.request_id
     history_list = [msg.model_dump() for msg in req.history] if req.history else None
 
     try:
         _streaming_mgr.create_stream(request_id)
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     async def _forward_pipeline_events():
-        """Forward events from stream_micro_mode into the StreamingManager."""
-        try:
-            async for event in stream_micro_mode(
-                user_query=req.query.strip(),
-                gateway=_gateway,
-                strategy=_strategy,
-                pool=_pool,
-                history=history_list,
-            ):
-                event_type_str = event.pop("event", "progress")
-                try:
-                    event_type = EventType(event_type_str)
-                except ValueError:
-                    event_type = EventType.PROGRESS
-                    event["original_event"] = event_type_str
+        """Run the pipeline and forward its result into the StreamingManager.
 
-                await _streaming_mgr.emit_event(
-                    request_id,
-                    StreamEvent(event=event_type, data=event),
-                )
+        Routes through ``run_micro_mode``/``DecisionEngine`` — the same path
+        as ``/api/query`` — so streaming and non-streaming requests share one
+        execution path and telemetry contract (RFC-007 Step 1). Per-agent
+        progress events are emitted internally by ``_run_with_decision_engine``
+        via ``streaming_manager.emit(passport.request_id, ...)`` into this same
+        ``_streaming_mgr``; this coroutine only needs to emit the terminal
+        result/error event.
+        """
+        try:
+            result = await asyncio.wait_for(
+                _aetheris["execution_manager"].execute(
+                    user_query=req.query.strip(),
+                    gateway=_gateway,
+                    strategy=_strategy,
+                    pool=_pool,
+                    history=history_list,
+                    passport=passport,
+                    decision_engine=_aetheris.get("decision_engine"),
+                    reasoning_graph=_aetheris.get("reasoning_graph"),
+                    claim_manager=_aetheris.get("claim_manager"),
+                    streaming_manager=_streaming_mgr,
+                    conversation_director=_aetheris.get("conversation_director"),
+                    session_id=session_id,
+                ),
+                timeout=_PIPELINE_TIMEOUT_SEC,
+            )
+            await _streaming_mgr.emit(
+                request_id,
+                EventType.RESULT,
+                {"payload": _build_frontend_payload(result)},
+            )
+        except asyncio.TimeoutError:
+            await _streaming_mgr.emit(
+                request_id,
+                EventType.ERROR,
+                {
+                    "stage": "timeout",
+                    "message": f"Pipeline timed out after {_PIPELINE_TIMEOUT_SEC}s.",
+                },
+            )
         except asyncio.CancelledError:
             logger.info("Pipeline forwarder cancelled for request_id=%s.", request_id)
+            raise
         except Exception as exc:
             logger.exception("Pipeline forwarder error: %s", exc)
             await _streaming_mgr.emit(
                 request_id,
                 EventType.ERROR,
-                {"stage": "unknown", "message": f"{type(exc).__name__}: {exc}"},
+                {"stage": "unknown", "message": "Pipeline execution failed."},
             )
         finally:
             # Put sentinel to signal end of stream
@@ -592,11 +657,12 @@ async def handle_query_stream(
                 yield f"data: {json.dumps(sse_event)}\n\n"
         except asyncio.CancelledError:
             logger.info("SSE stream cancelled by client for request_id=%s.", request_id)
+            raise
         except Exception as exc:
             logger.exception("SSE stream error: %s", exc)
             error_event = {
                 "event": "error",
-                "data": {"stage": "unknown", "message": f"{type(exc).__name__}: {exc}"},
+                "data": {"stage": "unknown", "message": "Streaming failed."},
                 "timestamp": datetime.utcnow().isoformat(),
             }
             yield f"data: {json.dumps(error_event)}\n\n"
@@ -644,18 +710,22 @@ def _get_dynamic_models() -> list[dict[str, Any]]:
 
     models_dict: dict[str, dict[str, Any]] = {}
     for role in _strategy.supported_roles:
-        for model_str in _strategy.get_model_chain(role):
+        for model_str in _strategy.get_configured_model_chain(role):
             if model_str not in models_dict:
                 provider_key = extract_provider_key(model_str)
                 latency_str = "1.1s"
-                is_active = True
+                is_active = _strategy.is_model_enabled(model_str)
                 if _pool:
                     metrics = _pool.get_health_metrics(provider_key)
                     if metrics and metrics.mean_latency_ms > 0:
                         latency_str = f"{(metrics.mean_latency_ms / 1000.0):.1f}s"
                     state = _pool._providers.get(provider_key)
                     if state:
-                        is_active = state.is_available and state.status.value != "dead"
+                        is_active = (
+                            is_active
+                            and state.is_available
+                            and state.status.value != "dead"
+                        )
 
                 clean_name = _clean_model_name(model_str)
                 models_dict[model_str] = {
@@ -677,6 +747,7 @@ def _get_dynamic_models() -> list[dict[str, Any]]:
 async def get_status(current_user: User = Depends(get_current_user)) -> dict:
     """Return provider health, dynamic models, and session telemetry."""
     return {
+        "user": {"email": current_user.email, "role": current_user.role},
         "providers": _pool.get_all_statuses() if _pool else [],
         "models": _get_dynamic_models(),
         "telemetry": observer.get_telemetry_dict(),
@@ -690,24 +761,24 @@ async def get_models(current_user: User = Depends(get_current_user)) -> dict:
     return {"models": _get_dynamic_models()}
 
 
-class ModelAddRequest(BaseModel):
+class ModelAddRequest(_StrictRequestModel):
     model: str
     role: str = "generation"
 
 
-class ModelToggleRequest(BaseModel):
+class ModelToggleRequest(_StrictRequestModel):
     id: str
     active: bool
 
 
-class StrategyModeRequest(BaseModel):
+class StrategyModeRequest(_StrictRequestModel):
     mode: str
 
 
 @app.post("/api/models/add")
 async def add_model_endpoint(
     req: ModelAddRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("admin")),
 ) -> dict:
     """Dynamically register a new model in the active strategy and pool."""
     if not _strategy or not _pool:
@@ -724,26 +795,23 @@ async def add_model_endpoint(
 @app.post("/api/models/toggle")
 async def toggle_model_endpoint(
     req: ModelToggleRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("admin")),
 ) -> dict:
     """Enable or disable a model provider in the active pool."""
     if not _pool:
         raise HTTPException(status_code=503, detail="ProviderPool not initialized.")
-    for provider_name, state in _pool._providers.items():
-        clean_id = _clean_model_name(provider_name).replace(".", "").replace("-", "")
-        if clean_id == req.id or provider_name == req.id:
-            state.is_available = req.active
-            if req.active and state.status == ProviderStatus.DEAD:
-                state.status = ProviderStatus.DEGRADED
-                state.error_count = 0
-            break
+    model = next((item for item in _get_dynamic_models() if item["full_id"] == req.id), None)
+    if model is None:
+        raise HTTPException(status_code=404, detail="Model not found.")
+    if not _strategy or not _strategy.set_model_enabled(req.id, req.active):
+        raise HTTPException(status_code=404, detail="Model not found.")
     return {"status": "success", "models": _get_dynamic_models()}
 
 
 @app.post("/api/strategy/mode")
 async def set_strategy_mode_endpoint(
     req: StrategyModeRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("admin")),
 ) -> dict:
     """Switch the orchestrator strategy mode (FREE, HYBRID, PAID)."""
     if not _strategy or not _pool:
@@ -751,10 +819,12 @@ async def set_strategy_mode_endpoint(
     try:
         _strategy.set_mode(req.mode)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"status": "success", "mode": _strategy.mode.value}
 
 
-class ConversationSaveRequest(BaseModel):
+class ConversationSaveRequest(_StrictRequestModel):
     id: str
     title: str = "New Conversation"
     mode: str = "HYBRID"
@@ -872,13 +942,13 @@ async def delete_conversation(
 def _get_vault_status() -> list[dict[str, Any]]:
     """Return secure masked status of API keys for each provider."""
     providers_meta = [
-        {"account": "OPENROUTER_API_KEY", "name": "OpenRouter", "description": "Unified gateway for Anthropic, Llama, DeepSeek & Qwen models"},
-        {"account": "OPENAI_API_KEY", "name": "OpenAI", "description": "GPT-4o, GPT-4o-mini, and Reasoning models"},
-        {"account": "GOOGLE_API_KEY", "name": "Google AI Studio", "description": "Gemini 2.5 Flash, Gemini 2.5 Pro"},
-        {"account": "GROQ_API_KEY", "name": "Groq Cloud", "description": "Ultra-fast Llama 3.3 70B & Llama 3.1 8B inference"},
-        {"account": "NVIDIA_NIM_API_KEY", "name": "NVIDIA NIM", "description": "Enterprise Nemotron & Llama 405B inference"},
-        {"account": "MISTRAL_API_KEY", "name": "Mistral AI", "description": "Mistral Large & Codestral models"},
-        {"account": "CUSTOM_GATEWAY_KEY", "name": "Custom API Gateway", "description": "Custom endpoint or Local LLM (Ollama / vLLM / LiteLLM)"},
+        {"account": "OPENROUTER_API_KEY", "name": "OpenRouter", "description": "Unified gateway for Anthropic, Llama, DeepSeek & Qwen models"},  # noqa: E501
+        {"account": "OPENAI_API_KEY", "name": "OpenAI", "description": "GPT-4o, GPT-4o-mini, and Reasoning models"},  # noqa: E501
+        {"account": "GOOGLE_API_KEY", "name": "Google AI Studio", "description": "Gemini 2.5 Flash, Gemini 2.5 Pro"},  # noqa: E501
+        {"account": "GROQ_API_KEY", "name": "Groq Cloud", "description": "Ultra-fast Llama 3.3 70B & Llama 3.1 8B inference"},  # noqa: E501
+        {"account": "NVIDIA_NIM_API_KEY", "name": "NVIDIA NIM", "description": "Enterprise Nemotron & Llama 405B inference"},  # noqa: E501
+        {"account": "MISTRAL_API_KEY", "name": "Mistral AI", "description": "Mistral Large & Codestral models"},  # noqa: E501
+        {"account": "CUSTOM_GATEWAY_KEY", "name": "Custom API Gateway", "description": "Custom endpoint or Local LLM (Ollama / vLLM / LiteLLM)"},  # noqa: E501
     ]
     results = []
     for p in providers_meta:
@@ -896,17 +966,14 @@ def _get_vault_status() -> list[dict[str, Any]]:
     return results
 
 
-class VaultSaveRequest(BaseModel):
+class VaultSaveRequest(_StrictRequestModel):
     account: str
     secret: str
-    gateway_url: str | None = None
 
 
-class CustomModelRequest(BaseModel):
+class CustomModelRequest(_StrictRequestModel):
     model_id: str
-    display_name: str | None = None
     role: str = "generation"
-    gateway_url: str | None = None
 
 
 @app.get("/api/config/vault")
@@ -918,7 +985,7 @@ async def get_vault_status(current_user: User = Depends(get_current_user)) -> di
 @app.post("/api/config/vault")
 async def save_vault_secret(
     req: VaultSaveRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("admin")),
 ) -> dict:
     """Save an API key securely into OS Keyring and running memory enclave."""
     account = req.account.strip()
@@ -933,20 +1000,24 @@ async def save_vault_secret(
     if secret:
         os.environ[f"AETHERIS_{account}"] = secret
         os.environ[account] = secret
+        storage = "memory"
         try:
             import keyring
             keyring.set_password("Aetheris", account, secret)
+            storage = "keyring"
         except Exception as exc:
             logger.debug("OS Keyring unavailable or non-writable: %s", exc)
-    if req.gateway_url:
-        os.environ[f"AETHERIS_{account}_URL"] = req.gateway_url.strip()
-    return {"status": "success", "providers": _get_vault_status()}
+    return {
+        "status": "success",
+        "storage": storage if secret else "unchanged",
+        "providers": _get_vault_status(),
+    }
 
 
 @app.post("/api/models/custom")
 async def register_custom_model(
     req: CustomModelRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("admin")),
 ) -> dict:
     """Register a custom model and optional gateway URL in orchestrator."""
     if not _strategy or not _pool:
@@ -957,8 +1028,6 @@ async def register_custom_model(
     _strategy.add_model(model_str, req.role)
     provider_key = extract_provider_key(model_str)
     _pool.register_provider(provider_key, roles=[req.role])
-    if req.gateway_url:
-        os.environ[f"AETHERIS_{provider_key.upper()}_GATEWAY_URL"] = req.gateway_url.strip()
     return {"status": "success", "models": _get_dynamic_models()}
 
 
@@ -995,12 +1064,12 @@ async def create_session(
         raise HTTPException(status_code=503, detail="Conversation director not available")
 
     session_id = req.session_id or str(uuid.uuid4())
-    owner = req.user_id or current_user.email
+    owner = current_user.email
 
     try:
         session = conversation_director.create_session(session_id, owner_email=owner)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return SessionCreateResponse(
         session_id=session.session_id,
@@ -1037,7 +1106,7 @@ async def get_session_metadata(
     try:
         metadata = conversation_director.get_metadata(session_id)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return SessionMetadataResponse(**metadata)
 
@@ -1057,7 +1126,7 @@ async def get_session_history(
     try:
         history = conversation_director.get_history(session_id)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return SessionHistoryResponse(history=history)
 
@@ -1079,9 +1148,9 @@ async def close_session(
     try:
         conversation_director.transition_state(session_id, ConversationState.COMPLETED)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return SessionCloseResponse(
         session_id=session_id,
@@ -1103,9 +1172,11 @@ async def list_checkpoints(
         raise HTTPException(status_code=503, detail="Checkpoint manager not available")
 
     try:
-        checkpoints = await checkpoint_manager.list_checkpoints(request_id=request_id)
+        checkpoints = await checkpoint_manager.list_checkpoints(
+            request_id=request_id, user_email=current_user.email
+        )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     checkpoint_list = [
         {
@@ -1132,9 +1203,11 @@ async def restore_checkpoint(
         raise HTTPException(status_code=503, detail="Checkpoint manager not available")
 
     try:
-        checkpoint = await checkpoint_manager.restore_checkpoint(checkpoint_id)
+        checkpoint = await checkpoint_manager.restore_checkpoint(
+            checkpoint_id, user_email=current_user.email
+        )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if checkpoint is None:
         raise HTTPException(status_code=404, detail=f"Checkpoint {checkpoint_id} not found or expired")
@@ -1157,14 +1230,40 @@ async def delete_checkpoints(
         raise HTTPException(status_code=503, detail="Checkpoint manager not available")
 
     try:
-        deleted_count = await checkpoint_manager.delete_checkpoints(request_id)
+        deleted_count = await checkpoint_manager.delete_checkpoints(
+            request_id, user_email=current_user.email
+        )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return CheckpointDeleteResponse(
         request_id=request_id,
         deleted_count=deleted_count,
     )
+
+
+# ── Execution Replay Debug Endpoint (Step 20a) ────────────────────────────
+
+@app.get("/api/debug/replay/{trace_id}")
+async def get_replay_trace(
+    trace_id: str,
+    current_user: User = Depends(require_role("admin")),
+) -> dict[str, Any]:
+    """Return a recorded execution trace for offline replay/debugging.
+
+    Gated by ``AETHERIS_ENABLE_REPLAY`` — when the flag is off the
+    ``replay_store`` component is ``None`` and this reports 503 rather
+    than fabricating an empty trace (ADR-007).
+    """
+    replay_store = _aetheris.get("replay_store")
+    if not replay_store:
+        raise HTTPException(status_code=503, detail="Execution replay is disabled")
+
+    trace = replay_store.load(trace_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail=f"Replay trace {trace_id} not found or expired")
+
+    return trace.model_dump(mode="json")
 
 
 # ── Provider Health Monitoring Endpoints ──────────────────────────────────
@@ -1266,23 +1365,19 @@ async def catch_all(full_path: str):
     # Skip API routes and auth routes
     if full_path.startswith("api/") or full_path.startswith("auth/") or full_path == "login":
         raise HTTPException(status_code=404, detail="Not found")
-        
+
     # Check if the requested file exists in WEB_DIR (e.g., favicon.svg)
     import mimetypes
-    requested_file = WEB_DIR / full_path
-    if requested_file.is_file():
+    web_dir_resolved = WEB_DIR.resolve()
+    requested_file = (WEB_DIR / full_path).resolve()
+    if requested_file.is_relative_to(web_dir_resolved) and requested_file.is_file():
         media_type, _ = mimetypes.guess_type(str(requested_file))
         return FileResponse(requested_file, media_type=media_type)
-        
-    root_file = Path(__file__).parent / full_path
-    if root_file.is_file() and "." in full_path.split("/")[-1]:
-        media_type, _ = mimetypes.guess_type(str(root_file))
-        return FileResponse(root_file, media_type=media_type)
-        
+
     # If it's a request for a static asset that doesn't exist, return 404
     if "." in full_path.split("/")[-1]:
         raise HTTPException(status_code=404, detail="Asset not found")
-        
+
     index = WEB_DIR / "index.html"
     if not index.exists():
         raise HTTPException(status_code=404, detail="Frontend not found.")

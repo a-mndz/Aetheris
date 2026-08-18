@@ -1,0 +1,19 @@
+{
+  "_meta": {
+    "owner": "RFC-005 (per-skill)",
+    "reviewers": "Architecture + Skills owners",
+    "spec": "RFC-005 §5 — resolution order: env AETHERIS_PROMPT_VERSIONS_PATH -> this file -> orchestrator/skills.py built-in defaults (with a warning).",
+    "notes": "skills.py defines behavior/composition; this file defines which template revision is active. One entry per initial skill (RFC-003 §13). Bumping a version here is an A/B and replay signal, not a code change."
+  },
+  "skills": {
+    "caveman":         { "version": "1", "template": "caveman_v1" },
+    "precision":       { "version": "1", "template": "precision_v1" },
+    "academic":        { "version": "1", "template": "academic_v1" },
+    "coder":           { "version": "1", "template": "coder_v1" },
+    "researcher":      { "version": "1", "template": "researcher_v1" },
+    "devils_advocate": { "version": "1", "template": "devils_advocate_v1" },
+    "explainer":       { "version": "1", "template": "explainer_v1" },
+    "security":        { "version": "1", "template": "security_v1" },
+    "performance":     { "version": "1", "template": "performance_v1" }
+  }
+}

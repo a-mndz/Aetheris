@@ -21,6 +21,9 @@ from orchestrator.checkpoints import CheckpointManager
 from orchestrator.claims import ClaimManager
 from orchestrator.conversation import ConversationDirector
 from orchestrator.decisions import DecisionEngine, DecisionStrategy
+from orchestrator.execution_manager import ExecutionManager
+from orchestrator.execution_replay import ReplayStore
+from orchestrator.feature_flags import load_flags
 from orchestrator.memory_manager import MemoryManager, SummarizationStrategy
 from orchestrator.reasoning_graph import ReasoningGraph
 from orchestrator.state_machine import StateMachine
@@ -60,6 +63,13 @@ def initialize_aetheris_components() -> dict[str, Any]:
     # ── Checkpoints ──────────────────────────────────────────────────
     checkpoint_manager = CheckpointManager(storage_backend="memory", retention_days=7)
     logger.info("CheckpointManager initialized (backend=memory, retention=7d).")
+
+    # ── Execution Replay (Step 20a) ──────────────────────────────────
+    # Only stand up the store when the flag is on; otherwise leave it
+    # None so the debug endpoint reports the feature as disabled.
+    flags = load_flags()
+    replay_store = ReplayStore() if flags.replay else None
+    logger.info("ReplayStore %s (flag=%s).", "initialized" if replay_store else "disabled", flags.replay)
 
     # ── Memory ───────────────────────────────────────────────────────
     memory_manager = MemoryManager(
@@ -113,10 +123,22 @@ def initialize_aetheris_components() -> dict[str, Any]:
         "runtime_engine=wired per HIGH-009)."
     )
 
+    from orchestrator.resource_manager import ResourceManager as DagResourceManager
+
+    execution_manager = ExecutionManager(
+        flags=flags,
+        resource_manager=DagResourceManager(rate_limiter=resource_manager),
+        memory_manager=memory_manager,
+        claim_manager=claim_manager,
+        replay_store=replay_store,
+        runtime_engine=runtime_engine,
+    )
+
     components: dict[str, Any] = {
         "security_validator": security_validator,
         "conversation_director": conversation_director,
         "checkpoint_manager": checkpoint_manager,
+        "replay_store": replay_store,
         "memory_manager": memory_manager,
         "reasoning_graph": reasoning_graph,
         "claim_manager": claim_manager,
@@ -124,6 +146,7 @@ def initialize_aetheris_components() -> dict[str, Any]:
         "streaming_manager": streaming_manager,
         "resource_manager": resource_manager,
         "runtime_engine": runtime_engine,
+        "execution_manager": execution_manager,
     }
 
     logger.info(

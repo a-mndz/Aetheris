@@ -6,7 +6,7 @@ with optional API credentials, hardware constraints, and logging validation.
 
 import logging
 import os
-from typing import Any, ClassVar
+from typing import ClassVar, Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -264,6 +264,16 @@ class aetherisConfig(BaseSettings):
     LOG_FORMAT: str = Field(
         default="%(asctime)s | %(name)-25s | %(levelname)-8s | %(message)s",
         description="Format string for Python's logging.Formatter.",
+    )
+    ENVIRONMENT: Literal["development", "test", "production"] = Field(
+        default="development",
+        validation_alias="AETHERIS_ENVIRONMENT",
+        description="Runtime environment used for security-sensitive defaults.",
+    )
+    LOG_MODEL_IO: bool = Field(
+        default=False,
+        validation_alias="AETHERIS_LOG_MODEL_IO",
+        description="Write full model prompts and responses to logs/model_io.log.",
     )
 
     @field_validator("LOG_LEVEL", mode="after")

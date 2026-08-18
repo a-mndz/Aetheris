@@ -206,12 +206,12 @@ class StreamingManager:
             event.data["__truncated__"] = True
             # Truncate data values to fit within limit
             truncated_data: dict[str, Any] = {}
-            running_size = len(json.dumps({"event": event.event.value, "timestamp": event.timestamp.isoformat()}).encode("utf-8"))
+            running_size = len(json.dumps({"event": event.event.value, "timestamp": event.timestamp.isoformat()}).encode("utf-8"))  # noqa: E501
             for key, value in event.data.items():
                 if key == "__truncated__":
                     continue
                 entry = json.dumps({key: value}).encode("utf-8")
-                if running_size + len(entry) + 2 <= self.PAYLOAD_LIMIT_BYTES - 50:  # 50 bytes for truncation marker
+                if running_size + len(entry) + 2 <= self.PAYLOAD_LIMIT_BYTES - 50:  # 50 bytes for truncation marker  # noqa: E501
                     truncated_data[key] = value
                     running_size += len(entry) + 2
                 else:
@@ -301,7 +301,7 @@ class StreamingManager:
         ]
 
         for rid in stale_ids:
-            logger.info("Cleaning up stale stream for request_id=%s (inactive > %ds).", rid, self.CLIENT_TIMEOUT_SEC)
+            logger.info("Cleaning up stale stream for request_id=%s (inactive > %ds).", rid, self.CLIENT_TIMEOUT_SEC)  # noqa: E501
             self.close_stream(rid)
 
         return len(stale_ids)
