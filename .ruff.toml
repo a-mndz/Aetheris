@@ -1,0 +1,33 @@
+# Ruff configuration — blocking lint gate since Phase 8.
+# `ruff check .` must pass clean. Pre-existing long lines were baselined
+# with per-line `# noqa: E501` stamps (Phase 8); do not add new ones.
+# New code SHOULD clear E/W/F (syntax, pyflakes-true-positive) errors.
+
+line-length = 110
+target-version = "py312"
+extend-exclude = [
+    "aetheris-ui",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "node_modules",
+    ".ua",
+]
+
+[lint]
+# Allow pre-existing F401 re-exports but enforce E/W/F812/E9 (real errors).
+select = ["E", "W", "F", "I", "B", "UP"]
+# Ignore E402 because legitimate module-level __future__ imports and
+# late-imports for circular imports trigger it.  Also ignore F401 for
+# backwards-compatible aliases established during Phase 1.
+ignore = [
+    "F401",
+    "E402",
+    "B008",
+    "UP",
+]
+
+[format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false

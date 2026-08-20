@@ -78,12 +78,14 @@ CHANGELOG.md
 aetheris-ui
 
 # Local config & tooling
-pytest.ini
-.ruff.toml
+# NOTE: pytest.ini and .ruff.toml must stay tracked — CI's backend job runs
+# `ruff check .` and `pytest`, which read them. Ignoring them made CI lint
+# with ruff defaults (84 F401 errors).
 alembic.ini
 
 # Reference documentation & repair reports
+# NOTE: docs/api.md must stay tracked — CI runs
+# `generate_api_reference.py --check`, which fails when the file is absent.
 docs/aetheris_architecture.md
-docs/api.md
 docs/deployment.md
 docs/PROJECT_BIBLE.md
