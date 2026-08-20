@@ -16,7 +16,7 @@ aiosqlite>=0.20.0
 # Experience DB (RFC-004 §7 / ADR-008). Testcontainers spins a disposable
 # PostgreSQL for the round-trip integration tests (§7.4). pgvector is installed
 # but UNUSED in v1 — it lights up in v2 against experience_learning (DEC-007).
-testcontainers[postgresql]>=4.0.0
+testcontainers[postgres]>=4.0.0
 pgvector>=0.2.0
 
 # Observability. structlog renders JSON logs in production and a human-readable
