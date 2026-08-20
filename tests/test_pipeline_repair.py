@@ -16,11 +16,11 @@ pytestmark = pytest.mark.unit
 class TestCRIT001LegacyPathBlocked:
     """CRIT-001 — DecisionEngine is the sole execution path."""
 
-    def test_legacy_blocked_without_decision_engine(
+    def test_missing_decision_engine_raises(
         self, monkeypatch: pytest.MonkeyPatch, stub_gateway, stub_strategy, stub_pool
     ) -> None:
         monkeypatch.delenv("aetheris_LEGACY_PIPELINE_ENABLED", raising=False)
-        from orchestrator.pipelines import _legacy_pipeline_blocked_msg, run_micro_mode
+        from orchestrator.pipelines import run_micro_mode
 
         with pytest.raises(RuntimeError) as exc:
             import asyncio as _aio
@@ -31,16 +31,28 @@ class TestCRIT001LegacyPathBlocked:
                 pool=stub_pool,
                 decision_engine=None,
             ))
-        assert "CRIT-001" in str(exc.value) or "legacy" in str(exc.value).lower()
+        assert "CRIT-001" in str(exc.value)
+        assert "decision_engine is required" in str(exc.value)
 
-    def test_legacy_path_remains_behind_opt_in_flag(
-        self, monkeypatch: pytest.MonkeyPatch
+    def test_legacy_opt_in_flag_no_longer_revives_legacy_path(
+        self, monkeypatch: pytest.MonkeyPatch, stub_gateway, stub_strategy, stub_pool
     ) -> None:
-        from orchestrator.pipelines import _is_legacy_pipeline_opted_in
+        """The legacy inline branch is deleted — the env var must not resurrect it."""
+        from orchestrator import pipelines
+
         monkeypatch.setenv("aetheris_LEGACY_PIPELINE_ENABLED", "true")
-        assert _is_legacy_pipeline_opted_in() is True
-        monkeypatch.setenv("aetheris_LEGACY_PIPELINE_ENABLED", "")
-        assert _is_legacy_pipeline_opted_in() is False
+        assert not hasattr(pipelines, "_is_legacy_pipeline_opted_in")
+        assert not hasattr(pipelines, "_legacy_pipeline_blocked_msg")
+
+        with pytest.raises(RuntimeError, match="CRIT-001"):
+            import asyncio as _aio
+            _aio.run(pipelines.run_micro_mode(
+                user_query="hello",
+                gateway=stub_gateway,
+                strategy=stub_strategy,
+                pool=stub_pool,
+                decision_engine=None,
+            ))
 
 
 class TestHIGH019ClaimExtractionToggle:

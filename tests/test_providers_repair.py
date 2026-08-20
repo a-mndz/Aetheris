@@ -13,8 +13,8 @@ import pytest
 from api_gateway.rate_limiter import (
     AsyncAPIGateway,
     ProviderPool,
+    ProviderResourceManager,
     ProviderState,
-    ResourceManager,
 )
 
 pytestmark = pytest.mark.unit
@@ -36,11 +36,11 @@ class TestHIGH004PublicStateAccessor:
 class TestHIGH012SemaphoreBehaviour:
     @pytest.mark.asyncio
     async def test_acquire_consumes_single_permit(self) -> None:
-        rm = ResourceManager()
+        rm = ProviderResourceManager()
         rm._ensure_provider_bucket("local/sim")
         # Saturate the semaphore with manual holds
         holds = []
-        for _ in range(ResourceManager.GLOBAL_CONCURRENCY_LIMIT):
+        for _ in range(ProviderResourceManager.GLOBAL_CONCURRENCY_LIMIT):
             await rm.global_semaphore.acquire()
             holds.append(True)
         # Now any further acquire should fail within the small timeout window
@@ -51,7 +51,7 @@ class TestHIGH012SemaphoreBehaviour:
 
     @pytest.mark.asyncio
     async def test_release_decrements_active_concurrency(self) -> None:
-        rm = ResourceManager()
+        rm = ProviderResourceManager()
         rm._ensure_provider_bucket("local/sim")
         acquired_a = await rm.acquire_resources(provider="local/sim", tokens=1)
         acquired_b = await rm.acquire_resources(provider="local/sim", tokens=1)
@@ -63,7 +63,7 @@ class TestHIGH012SemaphoreBehaviour:
 
     @pytest.mark.asyncio
     async def test_release_without_hold_does_not_inflate(self) -> None:
-        rm = ResourceManager()
+        rm = ProviderResourceManager()
         rm._ensure_provider_bucket("local/sim")
         before = rm.global_semaphore._value
         rm.release_resources(provider="local/sim")  # Should NOT release

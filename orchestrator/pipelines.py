@@ -9,12 +9,9 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timezone
-from difflib import SequenceMatcher
 from typing import Any, AsyncGenerator, TypedDict
 
-from agents.parser import parse_and_repair
 from agents.prompt_utils import (
-    assemble_generation_prompts,
     build_decision_dict,
     complete_conversation_session,
     init_conversation_context,
@@ -24,9 +21,7 @@ from api_gateway.rate_limiter import AsyncAPIGateway, ProviderPool
 from api_gateway.strategy import ProviderStrategy
 from core.passport import ExecutionPassport
 from core.schemas import AgentOutput
-from core.security import SecurityValidationError
 from orchestrator.claims import ClaimManager
-from orchestrator.evaluation import arbitrate_and_synthesize
 from orchestrator.feature_flags import FeatureFlags, load_flags
 from orchestrator.knowledge_layer import KnowledgeLayer
 from orchestrator.memory import epistemic_memory
@@ -41,7 +36,6 @@ logger = logging.getLogger(__name__)
 # ── Phase 1 Configuration Knobs ─────────────────────────────────────────
 
 
-_LEGACY_PIPELINE_ENV = "aetheris_LEGACY_PIPELINE_ENABLED"
 _DISABLE_CLAIMS_ENV = "aetheris_DISABLE_CLAIM_EXTRACTION"
 
 
@@ -55,21 +49,6 @@ def _is_claim_extraction_enabled() -> bool:
     """
     raw = os.environ.get(_DISABLE_CLAIMS_ENV, "0").strip().lower()
     return raw not in {"1", "true", "yes", "on"}
-
-
-def _legacy_pipeline_blocked_msg() -> str:
-    """Single source of truth for the CRIT-001 error message."""
-    return (
-        "CRIT-001: legacy inline pipeline path is disabled. "
-        "The DecisionEngine path is the sole execution entry point. "
-        f"Re-enable the legacy path only for staged rollouts via {_LEGACY_PIPELINE_ENV}=true."
-    )
-
-
-def _is_legacy_pipeline_opted_in() -> bool:
-    """Read the explicit opt-in flag for the legacy inline pipeline path."""
-    raw = os.environ.get(_LEGACY_PIPELINE_ENV, "").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
 
 
 # ── Result Types ─────────────────────────────────────────────────────────
@@ -86,23 +65,6 @@ class MicroModeResult(TypedDict, total=False):
     firewall_result: dict[str, Any] | None
     conversation_metadata: dict[str, Any] | None
     passport: dict[str, Any] | None
-
-
-# ── Knowledge-Absence Detection ─────────────────────────────────────────
-
-_ABSENCE_SENTINEL = "KNOWLEDGE ABSENCE DETECTED"
-
-
-def _is_knowledge_absent(breaker_output: AgentOutput | dict[str, Any]) -> bool:
-    if isinstance(breaker_output, AgentOutput):
-        return (
-            _ABSENCE_SENTINEL in breaker_output.answer
-            or breaker_output.confidence == 0.0
-        )
-
-    answer = breaker_output.get("answer", "")
-    confidence = breaker_output.get("confidence", 0.0)
-    return _ABSENCE_SENTINEL in answer or confidence == 0.0
 
 
 # ── Conversation FAILED State Helpers (MED-004 / MED-016) ────────────────
@@ -195,301 +157,10 @@ async def run_micro_mode(
             flags=flags,
         )
 
-    # CRIT-001 repair: the DecisionEngine path is the sole execution path.
-    # The legacy inline branch is preserved behind an opt-in environment flag
-    # so staged rollouts can compare both paths side-by-side per manifest §3
-    # mitigation, but production callers must provide a decision_engine.
-    legacy_enabled = os.environ.get(_LEGACY_PIPELINE_ENV, "").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
-    if not legacy_enabled:
-        logger.error(_legacy_pipeline_blocked_msg())
-        raise RuntimeError(_legacy_pipeline_blocked_msg())
-
-    # ── Legacy inline path (opt-in rollback mode) ───────────────────
-    logger.warning(
-        "Running legacy pipeline path — this branch is deprecated. "
-        "Set decision_engine and unset %s before next release.",
-        _LEGACY_PIPELINE_ENV,
-    )
-    prompts = assemble_generation_prompts(strategy.mode.value)
-    breaker_sys = prompts["breaker"]
-    logician_sys = prompts["logician"]
-    creative_sys = prompts["creative"]
-
-    try:
-        breaker_raw = await gateway.execute_with_fallback(
-            prompt=user_query,
-            system_prompt=breaker_sys,
-            role="breaker",
-            strategy=strategy,
-            pool=pool,
-            history=history,
-        )
-    except SecurityValidationError:
-        raise
-    except Exception as exc:
-        logger.error("Breaker gate call failed: %s: %s", type(exc).__name__, exc)
-        if passport is not None:
-            passport.record_error("breaker", str(exc))
-        _mark_conversation_failed(conversation_director, session_id)
-        return MicroModeResult(
-            status="error",
-            winning_answer=f"Pipeline error at Breaker gate: {exc}",
-            validation_score=0.0,
-            confidence_delta=0.0,
-            judge_decision=None,
-            logician_output=None,
-            creative_output=None,
-        )
-
-    breaker_output = parse_and_repair(breaker_raw, AgentOutput)
-
-    if _is_knowledge_absent(breaker_output):
-        reason = (
-            breaker_output.answer
-            if isinstance(breaker_output, AgentOutput)
-            else breaker_output.get("answer", "Unknown parse failure")
-        )
-        logger.warning("Breaker gate ABORTED pipeline: %s", reason)
-        if passport is not None:
-            passport.record_warning(f"Breaker gate aborted: {reason}")
-            passport.add_agent_output("breaker", breaker_output)
-        _mark_conversation_failed(conversation_director, session_id)
-        return MicroModeResult(
-            status="aborted",
-            winning_answer=reason,
-            validation_score=0.0,
-            confidence_delta=0.0,
-            judge_decision=None,
-            logician_output=None,
-            creative_output=None,
-        )
-
-    logger.info("Breaker gate passed — proceeding to generation.")
-    if passport is not None:
-        passport.add_agent_output("breaker", breaker_output)
-
-    # ── Step 2: Concurrent Logician + Creative generation ────────────
-    logger.info("Step 2/4 — Launching Logician and Creative agents concurrently.")
-
-    logician_result, creative_result = await asyncio.gather(
-        gateway.execute_with_fallback(
-            prompt=user_query,
-            system_prompt=logician_sys,
-            role="generation",
-            strategy=strategy,
-            pool=pool,
-            history=history,
-        ),
-        gateway.execute_with_fallback(
-            prompt=user_query,
-            system_prompt=creative_sys,
-            role="generation",
-            strategy=strategy,
-            pool=pool,
-            history=history,
-        ),
-        return_exceptions=True,
-    )
-
-    # Handle exceptions
-    if isinstance(logician_result, BaseException):
-        logger.error("Logician generation failed: %s", logician_result)
-        if passport is not None:
-            passport.record_error("logician", str(logician_result))
-        _mark_conversation_failed(conversation_director, session_id)
-        return MicroModeResult(
-            status="error",
-            winning_answer=f"Logician generation failed: {logician_result}",
-            validation_score=0.0,
-            confidence_delta=0.0,
-            judge_decision=None,
-            logician_output=None,
-            creative_output=None,
-        )
-
-    if isinstance(creative_result, BaseException):
-        logger.error("Creative generation failed: %s", creative_result)
-        if passport is not None:
-            passport.record_error("creative", str(creative_result))
-        _mark_conversation_failed(conversation_director, session_id)
-        return MicroModeResult(
-            status="error",
-            winning_answer=f"Creative generation failed: {creative_result}",
-            validation_score=0.0,
-            confidence_delta=0.0,
-            judge_decision=None,
-            logician_output=None,
-            creative_output=None,
-        )
-
-    # Both succeeded — parse raw strings into structured outputs.
-    logician_output = parse_and_repair(logician_result, AgentOutput)
-    creative_output = parse_and_repair(creative_result, AgentOutput)
-
-    logger.info(
-        "Both generations parsed — Logician type=%s, Creative type=%s.",
-        type(logician_output).__name__,
-        type(creative_output).__name__,
-    )
-
-    logician_agent = _ensure_agent_output(logician_output, "Logician")
-    creative_agent = _ensure_agent_output(creative_output, "Creative")
-
-    # Track agent outputs in passport
-    if passport is not None:
-        passport.add_agent_output("logician", logician_output)
-        passport.add_agent_output("creative", creative_output)
-
-    # Guard: if either agent produced an error sentinel, skip the judge.
-    if logician_agent.answer.startswith("ERROR:") and creative_agent.answer.startswith("ERROR:"):
-        logger.error("Both agent outputs are parse-failure sentinels — skipping judge.")
-        _mark_conversation_failed(conversation_director, session_id)
-        return MicroModeResult(
-            status="error",
-            winning_answer="Both generation agents failed to produce valid output.",
-            validation_score=0.0,
-            confidence_delta=0.0,
-            judge_decision=None,
-            logician_output=logician_output,
-            creative_output=creative_output,
-        )
-
-    # ── Step 3: Validation & Synthesis Judge ──────────────────────────
-    logger.info("Step 3/4 — Submitting generations to validation arbitrage judge.")
-
-    # Retrieve memory failures/lessons learned for the active prompt
-    lessons = epistemic_memory.get_lessons_learned(user_query)
-
-    try:
-        final_output = await arbitrate_and_synthesize(
-            query=user_query,
-            answer_a=logician_agent.answer,
-            answer_b=creative_agent.answer,
-            gateway=gateway,
-            strategy=strategy,
-            pool=pool,
-            lessons=lessons,
-            history=history,
-        )
-    except Exception as exc:
-        logger.error("Synthesis judge failed: %s", exc)
-        if passport is not None:
-            passport.record_error("judge", str(exc))
-        _mark_conversation_failed(conversation_director, session_id)
-        return MicroModeResult(
-            status="error",
-            winning_answer=f"Logic judge evaluation failed: {exc}",
-            validation_score=0.0,
-            confidence_delta=0.0,
-            judge_decision=None,
-            logician_output=logician_output,
-            creative_output=creative_output,
-        )
-
-    # Guard: parse_and_repair can return a dict on parse failure.
-    if isinstance(final_output, dict):
-        logger.error("Judge output parse failure: %s", final_output)
-        _mark_conversation_failed(conversation_director, session_id)
-        return MicroModeResult(
-            status="error",
-            winning_answer=f"Judge output unparseable: {final_output.get('answer', 'unknown')}",
-            validation_score=0.0,
-            confidence_delta=0.0,
-            judge_decision=None,
-            logician_output=logician_output,
-            creative_output=creative_output,
-        )
-
-    if passport is not None:
-        passport.add_agent_output("judge", final_output)
-
-    # Stateful failure tracking (epistemic loop failures)
-    if final_output.validation_score < 7.0:
-        logger.warning(
-            "Low validation score (%f) detected. Recording failure pattern.",
-            final_output.validation_score,
-        )
-        epistemic_memory.record_failure(
-            query=user_query,
-            explanation=", ".join(final_output.disagreement_notes) or "Low validation score.",
-            score=final_output.validation_score,
-        )
-
-    # ── Step 4: Assemble result ──────────────────────────────────────
-    logger.info("Step 4/4 — Assembling final micro-mode result.")
-
-    decision_dict = build_decision_dict(
-        logician_agent.confidence,
-        creative_agent.confidence,
-        final_output.overall_confidence,
-        final_output.overall_bias_risk,
-        final_output.disagreement_notes,
-    )
-
-    confidence_delta = _calculate_confidence_delta(logician_agent, creative_agent)
-
-    all_claims = _process_claims_for_outputs(
-        claim_manager=claim_manager,
-        outputs=[
-            ("breaker", breaker_output),
-            ("logician", logician_output),
-            ("creative", creative_output),
-            ("judge", final_output),
-        ],
-        user_query=user_query,
-        history=history,
-        reasoning_graph=reasoning_graph,
-    )
-    final_answer, unverified_dicts, firewall_result = _apply_output_firewall(
-        claim_manager=claim_manager,
-        final_text=final_output.final_answer,
-        user_query=user_query,
-        history=history,
-        agent_outputs={
-            "breaker": breaker_output,
-            "logician": logician_output,
-            "creative": creative_output,
-            "judge": final_output,
-        },
-        reasoning_graph=reasoning_graph,
-    )
-    final_output.final_answer = final_answer
-
-    unverified = claim_manager.get_unverified_claims(claims=all_claims)
-    seen_claim_ids = {entry["claim_id"] for entry in unverified_dicts}
-    for claim in unverified:
-        if claim.claim_id not in seen_claim_ids:
-            unverified_dicts.append(_claim_dict(claim))
-            seen_claim_ids.add(claim.claim_id)
-
-    if unverified and passport is not None:
-        for c in unverified:
-            passport.record_warning(
-                f"Unverified claim from {c.source_agent}: {c.content[:100]}"
-            )
-    if firewall_result is not None and firewall_result["removed_or_qualified_count"] > 0:
-        final_output.disagreement_notes.append(
-            f"Hallucination firewall qualified {firewall_result['removed_or_qualified_count']} unsupported claim(s)."  # noqa: E501
-        )
-
-    # ── Conversation completion (Task 21.5, legacy path) ─────────────
-    conversation_metadata = complete_conversation_session(
-        conversation_director, session_id, final_output.final_answer, "completed", logger
-    ) or conversation_metadata
-
-    return MicroModeResult(
-        status="success",
-        winning_answer=final_output.final_answer,
-        validation_score=final_output.validation_score,
-        confidence_delta=confidence_delta,
-        judge_decision=decision_dict,
-        logician_output=logician_output,
-        creative_output=creative_output,
-        unverified_claims=unverified_dicts,
-        firewall_result=firewall_result,
-        conversation_metadata=conversation_metadata,
+    # CRIT-001: the DecisionEngine path is the sole execution path.
+    raise RuntimeError(
+        "CRIT-001: a decision_engine is required. The DecisionEngine path is "
+        "the sole execution entry point; the legacy inline pipeline was removed."
     )
 
 

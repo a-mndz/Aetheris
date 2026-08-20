@@ -34,7 +34,7 @@ from typing import Any
 
 from api_gateway.capabilities import CapabilityRegistry, get_capability_registry
 from api_gateway.rate_limiter import (
-    ResourceManager as RateLimiter,
+    ProviderResourceManager as RateLimiter,
 )
 from api_gateway.rate_limiter import (
     extract_provider_key,

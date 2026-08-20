@@ -540,7 +540,7 @@ class TokenBucket:
         return needed / self.refill_rate
 
 
-class ResourceManager:
+class ProviderResourceManager:
     """
     Enforces rate limits at provider, user, and global levels with dynamic
     adjustment based on provider health status.

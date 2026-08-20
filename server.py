@@ -11,13 +11,14 @@ import asyncio
 import json
 import logging
 import os
+import secrets
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -37,7 +38,7 @@ from api_gateway.rate_limiter import (
     ProviderStatus,
     extract_provider_key,
 )
-from core.config import get_settings
+from core.config import configure_logging, get_settings
 from core.database import get_db, verify_schema_current
 from core.models import ConversationMessageRecord, ConversationSessionRecord, User
 from core.security import (
@@ -48,6 +49,7 @@ from core.security import (
     require_role,
     verify_password,
 )
+from orchestrator import metrics
 from orchestrator.aetheris_orchestrator import create_request_passport, initialize_aetheris_components
 from orchestrator.background_tasks import cancel_background_tasks, create_background_tasks
 from orchestrator.conversation import ConversationState
@@ -121,10 +123,7 @@ async def lifespan(app: FastAPI):
     global _gateway, _strategy, _pool, _streaming_mgr, _aetheris
 
     settings = get_settings()
-    logging.basicConfig(
-        level=getattr(logging, settings.LOG_LEVEL, logging.INFO),
-        format=settings.LOG_FORMAT,
-    )
+    configure_logging(settings)
 
     logger.info("Verifying PostgreSQL schema revision...")
     try:
@@ -1264,6 +1263,39 @@ async def get_replay_trace(
         raise HTTPException(status_code=404, detail=f"Replay trace {trace_id} not found or expired")
 
     return trace.model_dump(mode="json")
+
+
+@app.get("/metrics")
+async def prometheus_metrics(request: Request) -> Response:
+    """Prometheus text exposition of decision and provider-health metrics.
+
+    Auth: a scraper cannot present the httpOnly JWT cookie the admin endpoints
+    rely on, so this path uses its own bearer token (``AETHERIS_METRICS_TOKEN``).
+    In production the token is mandatory — an unset token means the endpoint
+    refuses to serve rather than silently exposing internals. Outside production
+    an unset token leaves it open so local scraping needs no setup.
+    """
+    settings = get_settings()
+    expected = settings.METRICS_TOKEN
+
+    if not expected:
+        if settings.ENVIRONMENT == "production":
+            logger.error("AETHERIS_METRICS_TOKEN unset — refusing to serve /metrics.")
+            raise HTTPException(
+                status_code=503,
+                detail="Metrics endpoint unconfigured: set AETHERIS_METRICS_TOKEN.",
+            )
+    else:
+        header = request.headers.get("authorization", "")
+        scheme, _, presented = header.partition(" ")
+        if scheme.lower() != "bearer" or not secrets.compare_digest(presented, expected):
+            raise HTTPException(status_code=401, detail="Invalid metrics token.")
+
+    metrics.refresh(
+        decision_engine=_aetheris.get("decision_engine"),
+        pool=_pool,
+    )
+    return Response(content=metrics.render(), media_type=metrics.CONTENT_TYPE)
 
 
 # ── Provider Health Monitoring Endpoints ──────────────────────────────────

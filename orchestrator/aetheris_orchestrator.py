@@ -49,7 +49,7 @@ def initialize_aetheris_components() -> dict[str, Any]:
         - ``claim_manager``           – ClaimManager
         - ``decision_engine``         – DecisionEngine
         - ``streaming_manager``       – StreamingManager
-        - ``resource_manager``        – ResourceManager (from api_gateway.rate_limiter)
+        - ``resource_manager``        – ProviderResourceManager (from api_gateway.rate_limiter)
         - ``runtime_engine``          – RuntimeEngine
     """
     # ── Security ─────────────────────────────────────────────────────
@@ -95,10 +95,10 @@ def initialize_aetheris_components() -> dict[str, Any]:
     # provider call goes through contract enforcement (security,
     # rate-limiting, streaming, per-agent metrics).  Build the resource
     # manager first so RuntimeEngine can depend on it.
-    from api_gateway.rate_limiter import ResourceManager
+    from api_gateway.rate_limiter import ProviderResourceManager
 
-    resource_manager = ResourceManager()
-    logger.info("ResourceManager initialized.")
+    resource_manager = ProviderResourceManager()
+    logger.info("ProviderResourceManager initialized.")
 
     runtime_engine = RuntimeEngine(
         security_validator=security_validator,

@@ -26,7 +26,7 @@ from typing import Any
 import secrets_bootstrap  # noqa: F401  (side-effecting import)
 from api_gateway import AllModelsExhaustedError, AsyncAPIGateway, ProviderPool, ProviderStrategy
 from api_gateway.rate_limiter import extract_provider_key
-from core.config import get_settings
+from core.config import configure_logging, get_settings
 from core.passport import ExecutionPassport
 from orchestrator.aetheris_orchestrator import (
     create_request_passport,
@@ -181,10 +181,7 @@ async def main() -> None:
 
     # ── Settings & logging ───────────────────────────────────────────
     settings = get_settings()
-    logging.basicConfig(
-        level=getattr(logging, settings.LOG_LEVEL, logging.INFO),
-        format=settings.LOG_FORMAT,
-    )
+    configure_logging(settings)
     logger.info("aetheris starting up …")
 
     # ── Infrastructure ───────────────────────────────────────────────

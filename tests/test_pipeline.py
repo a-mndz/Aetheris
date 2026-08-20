@@ -26,7 +26,6 @@ def test_legacy_decision_engine_helper_available() -> None:
     from orchestrator import pipelines
     assert hasattr(pipelines, "_is_claim_extraction_enabled")
     assert callable(pipelines._is_claim_extraction_enabled)
-    assert callable(pipelines._legacy_pipeline_blocked_msg)
 
 
 def test_decision_engine_exposes_safe_task_helper() -> None:

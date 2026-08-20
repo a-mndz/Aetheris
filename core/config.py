@@ -6,7 +6,8 @@ with optional API credentials, hardware constraints, and logging validation.
 
 import logging
 import os
-from typing import ClassVar, Literal
+import sys
+from typing import Any, ClassVar, Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -263,7 +264,11 @@ class aetherisConfig(BaseSettings):
     )
     LOG_FORMAT: str = Field(
         default="%(asctime)s | %(name)-25s | %(levelname)-8s | %(message)s",
-        description="Format string for Python's logging.Formatter.",
+        description=(
+            "Format string for Python's logging.Formatter. Only consulted by the "
+            "legacy plain-text fallback in configure_logging() when structlog is "
+            "unavailable; the structlog renderers ignore it."
+        ),
     )
     ENVIRONMENT: Literal["development", "test", "production"] = Field(
         default="development",
@@ -274,6 +279,15 @@ class aetherisConfig(BaseSettings):
         default=False,
         validation_alias="AETHERIS_LOG_MODEL_IO",
         description="Write full model prompts and responses to logs/model_io.log.",
+    )
+    METRICS_TOKEN: str = Field(
+        default="",
+        validation_alias="AETHERIS_METRICS_TOKEN",
+        description=(
+            "Bearer token required to scrape /metrics. Prometheus cannot present "
+            "the JWT cookie the admin endpoints use, so the scrape path gets its "
+            "own credential. Mandatory in production; optional elsewhere."
+        ),
     )
 
     @field_validator("LOG_LEVEL", mode="after")
@@ -341,3 +355,96 @@ def get_settings() -> aetherisConfig:
     if _settings is None:
         _settings = aetherisConfig()  # type: ignore[call-arg]
     return _settings
+
+
+# ── Structured Logging ───────────────────────────────────────────────────
+
+_logging_configured = False
+
+
+def configure_logging(
+    settings: aetherisConfig | None = None,
+    *,
+    force: bool = False,
+) -> None:
+    """Route every log record — stdlib and structlog alike — through one chain.
+
+    JSON lines when ``ENVIRONMENT == "production"`` so log aggregators can parse
+    them; a coloured console renderer everywhere else, because JSON in a dev
+    terminal is unreadable and people respond by turning logging off.
+
+    The whole codebase logs via ``logging.getLogger(__name__)`` with ``%``-style
+    args. Those records are *foreign* to structlog, so they are piped through
+    :class:`structlog.stdlib.ProcessorFormatter`, which applies the same
+    processor chain and renderer. No call sites need to change.
+
+    Idempotent — safe to call from both ``main.py`` and ``server.py``'s lifespan.
+    Pass ``force=True`` to re-apply after a settings change (tests).
+    """
+    global _logging_configured  # noqa: PLW0603
+    if _logging_configured and not force:
+        return
+
+    settings = settings or get_settings()
+    level = getattr(logging, settings.LOG_LEVEL, logging.INFO)
+    root = logging.getLogger()
+
+    try:
+        import structlog
+    except ImportError:  # pragma: no cover - structlog is a declared dependency
+        # ponytail: plain-text fallback so a missing optional wheel degrades
+        # instead of taking the process down. Remove once CI pins are enforced.
+        logging.basicConfig(level=level, format=settings.LOG_FORMAT, force=True)
+        root.warning("structlog unavailable — falling back to plain-text logging.")
+        _logging_configured = True
+        return
+
+    shared_processors = [
+        structlog.contextvars.merge_contextvars,
+        structlog.stdlib.add_logger_name,
+        structlog.stdlib.add_log_level,
+        structlog.stdlib.PositionalArgumentsFormatter(),
+        structlog.processors.TimeStamper(fmt="iso", utc=True),
+        structlog.processors.StackInfoRenderer(),
+        structlog.processors.UnicodeDecoder(),
+    ]
+
+    if settings.ENVIRONMENT == "production":
+        # show_locals=False is a security requirement, not a style choice: the
+        # default dict_tracebacks serialises every local in scope at raise time,
+        # which puts API keys, JWTs, and DB passwords into the log aggregator.
+        exc_processor = structlog.processors.ExceptionRenderer(
+            structlog.tracebacks.ExceptionDictTransformer(show_locals=False)
+        )
+        renderer: Any = structlog.processors.JSONRenderer()
+    else:
+        exc_processor = structlog.processors.format_exc_info
+        renderer = structlog.dev.ConsoleRenderer(colors=sys.stderr.isatty())
+
+    structlog.configure(
+        processors=[
+            *shared_processors,
+            exc_processor,
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+        ],
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
+        cache_logger_on_first_use=True,
+    )
+
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(
+        structlog.stdlib.ProcessorFormatter(
+            foreign_pre_chain=[*shared_processors, exc_processor],
+            processors=[
+                structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+                renderer,
+            ],
+        )
+    )
+
+    for existing in root.handlers[:]:
+        root.removeHandler(existing)
+    root.addHandler(handler)
+    root.setLevel(level)
+    _logging_configured = True

@@ -19,3 +19,10 @@ aiosqlite>=0.20.0
 testcontainers[postgresql]>=4.0.0
 pgvector>=0.2.0
 
+# Observability. structlog renders JSON logs in production and a human-readable
+# console stream in dev (core/config.py). prometheus-client backs the /metrics
+# endpoint (orchestrator/metrics.py). OpenTelemetry is installed in the local
+# venv but intentionally undeclared until the tracing step lands.
+structlog>=26.1.0
+prometheus-client>=0.24.1
+
